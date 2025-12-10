@@ -97,9 +97,21 @@ public class SFTPPanel extends JPanel {
         // Close button
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> {
-            Window window = SwingUtilities.getWindowAncestor(this);
-            if (window != null) {
-                window.dispose();
+            // Check if embedded in a split pane (e.g., DetachedSessionFrame)
+            Container parent = getParent();
+            if (parent instanceof JSplitPane) {
+                JSplitPane splitPane = (JSplitPane) parent;
+                // Hide this panel by removing from split pane
+                close();
+                splitPane.setBottomComponent(null);
+                splitPane.setDividerSize(0);
+            } else {
+                // Standalone window - dispose it
+                Window window = SwingUtilities.getWindowAncestor(this);
+                if (window != null) {
+                    close();
+                    window.dispose();
+                }
             }
         });
         bottomPanel.add(closeBtn, BorderLayout.EAST);

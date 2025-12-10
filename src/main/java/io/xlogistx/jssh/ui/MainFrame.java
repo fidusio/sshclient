@@ -661,6 +661,17 @@ public class MainFrame extends JFrame {
             splitPane.setResizeWeight(0.6); // Terminal gets 60% by default
             splitPane.setOneTouchExpandable(true);
 
+            // Listen for SFTP panel removal (e.g., when closed via its Close button)
+            splitPane.addPropertyChangeListener(JSplitPane.BOTTOM, evt -> {
+                if (evt.getNewValue() == null && sftpVisible) {
+                    sftpVisible = false;
+                    sftpPanel = null;
+                    if (toggleSftpItem != null) {
+                        toggleSftpItem.setText("Show SFTP Browser");
+                    }
+                }
+            });
+
             // Initially just show the terminal (no bottom component)
             add(splitPane, BorderLayout.CENTER);
 

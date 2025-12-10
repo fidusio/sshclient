@@ -43,7 +43,6 @@ nb-configuration.xml
 .project
 .classpath
 .cproject
-*.vscode
 .settings/
 bin/
 tmp/
@@ -65,18 +64,13 @@ out/
 Thumbs.db
 ehthumbs.db
 
-# Linux
+# Temp/backup files
 *~
-
-# Others
 *.swp
-*~
 *.swo
 *.bak
 *.orig
 *.save
+
+# Claude Code
 .claude
-
-# Custom
-# Add any custom exclusions here
-

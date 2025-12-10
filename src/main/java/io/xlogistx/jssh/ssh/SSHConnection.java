@@ -162,8 +162,10 @@ public class SSHConnection {
             session.auth().verify(timeoutMs, TimeUnit.MILLISECONDS);
             return true;
         } catch (org.apache.sshd.common.SshException e) {
+
             throw new IOException("Authentication failed: " + e.getMessage(), e);
         } catch (Exception e) {
+
             throw new IOException("Authentication error: " + e.getMessage(), e);
         }
     }
