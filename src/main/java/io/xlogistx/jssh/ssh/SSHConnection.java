@@ -162,10 +162,10 @@ public class SSHConnection {
             session.auth().verify(timeoutMs, TimeUnit.MILLISECONDS);
             return true;
         } catch (org.apache.sshd.common.SshException e) {
-
+            e.printStackTrace();
             throw new IOException("Authentication failed: " + e.getMessage(), e);
         } catch (Exception e) {
-
+            e.printStackTrace();
             throw new IOException("Authentication error: " + e.getMessage(), e);
         }
     }
@@ -198,6 +198,7 @@ public class SSHConnection {
             }
             throw new IOException("No keys found in file");
         } catch (java.security.GeneralSecurityException e) {
+            e.printStackTrace();
             throw new IOException("Failed to load key: " + e.getMessage(), e);
         }
     }

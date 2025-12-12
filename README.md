@@ -150,6 +150,15 @@ Supported:
 - EdDSA (net.i2p.crypto) 0.3.0
 - SLF4J 2.0.9
 
+## How to use it
+
+Make sure you have jre 11+ installed on your system.\
+Get [jar-loader.jar](https://xlogistx.io/apps/jar-loader.jar)\
+Get [jssh.jar](https://xlogistx.io/apps/jssh.jar)
+
+Then type\
+java -jar [jar-loader.jar](https://xlogistx.io/apps/jar-loader.jar) -jar [jssh.jar](https://xlogistx.io/apps/jssh.jar)
+
 ## License
 
 MIT License
