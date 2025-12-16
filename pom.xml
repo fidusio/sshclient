@@ -6,7 +6,7 @@
 
     <groupId>io.xlogistx</groupId>
     <artifactId>jssh</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>JSSH - Java SSH Client</name>
@@ -131,7 +131,7 @@
                                 <descriptor>src/assembly/fat-jar.xml</descriptor>
                             </descriptors>
                             <appendAssemblyId>false</appendAssemblyId>
-                            <finalName>${project.artifactId}-${project.version}</finalName>
+                            <finalName>${project.artifactId}</finalName>
                         </configuration>
                     </execution>
                 </executions>
