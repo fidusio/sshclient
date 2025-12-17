@@ -4,6 +4,7 @@ import io.xlogistx.jssh.config.ConnectionConfig;
 import io.xlogistx.jssh.config.ConnectionManager;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import io.xlogistx.jssh.terminal.TerminalPanel;
+import org.apache.sshd.client.channel.ChannelShell;
 
 import javax.swing.*;
 import java.awt.*;
@@ -618,7 +619,7 @@ public class ConnectDialog extends JDialog {
                 // Open shell with X11 forwarding if enabled
                 final String fx11Host = x11Host;
                 final int fx11DisplayNum = x11DisplayNum;
-                var shell = conn.openShell(termType, cols, rows, enableX11, fx11Host, fx11DisplayNum);
+                ChannelShell shell = conn.openShell(termType, cols, rows, enableX11, fx11Host, fx11DisplayNum);
 
                 // Connect streams
                 terminal.setOutputStream(shell.getInvertedIn());

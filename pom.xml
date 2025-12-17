@@ -4,24 +4,36 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.xlogistx</groupId>
+    <parent>
+        <groupId>io.xlogistx</groupId>
+        <artifactId>xlogistx-mvn</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
     <artifactId>jssh</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <packaging>jar</packaging>
 
     <name>JSSH - Java SSH Client</name>
     <description>A modern GUI SSH client using Apache MINA SSHD</description>
 
     <properties>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jdk.version>11</jdk.version>
+<!--        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>-->
+<!--        <jdk.version>1.8</jdk.version>-->
 
-        <apache-ssh.version>2.16.0</apache-ssh.version>
+<!--        <apache-ssh.version>2.16.0</apache-ssh.version>-->
         <slf4j.version>2.0.9</slf4j.version>
-        <bc.version>RELEASE</bc.version>
+<!--        <bc.version>1.83</bc.version>-->
+<!--        <zoxweb-core.version>2.3.9</zoxweb-core.version>-->
     </properties>
 
     <dependencies>
+
+        <dependency>
+            <groupId>org.zoxweb</groupId>
+            <artifactId>zoxweb-core</artifactId>
+            <version>${zoxweb-core.version}</version>
+        </dependency>
         <!-- Apache MINA SSHD -->
         <dependency>
             <groupId>org.apache.sshd</groupId>
@@ -43,12 +55,12 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.83</version>
+            <version>${bc.version}</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.83</version>
+            <version>${bc.version}</version>
         </dependency>
 
         <!-- Logging -->

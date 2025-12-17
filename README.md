@@ -47,19 +47,19 @@ A modern GUI SSH client written in Java using Apache MINA SSHD.
 mvn clean package
 ```
 
-This creates `target/jssh-1.0.0.jar` with all dependencies included.
+This creates `target/jssh-1.0.2.jar` with all dependencies included.
 
 ## Running
 
 ```bash
 # GUI mode
-java -jar target/jssh-1.0.0.jar
+java -jar jssh.jar
 
 # Quick connect
-java -jar target/jssh-1.0.0.jar user@hostname
+java -jar jssh.jar user@hostname
 
 # With port
-java -jar target/jssh-1.0.0.jar user@hostname:2222
+java -jar jssh.jar user@hostname:2222
 ```
 
 ## Usage
@@ -101,15 +101,15 @@ java -jar target/jssh-1.0.0.jar user@hostname:2222
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| Ctrl+N | New connection |
-| Ctrl+W | Close tab |
-| Ctrl+Q | Exit |
-| Ctrl+C | Copy (when text selected) |
-| Ctrl+V | Paste |
-| Ctrl+Shift+C | Copy in terminal |
-| Ctrl+Shift+V | Paste in terminal |
+| Shortcut     | Action                    |
+|--------------|---------------------------|
+| Ctrl+N       | New connection            |
+| Ctrl+W       | Close tab                 |
+| Ctrl+Q       | Exit                      |
+| Ctrl+C       | Copy (when text selected) |
+| Ctrl+V       | Paste                     |
+| Ctrl+Shift+C | Copy in terminal          |
+| Ctrl+Shift+V | Paste in terminal         |
 
 ## Terminal Escape Sequences
 
@@ -146,13 +146,13 @@ Supported:
 
 ## Dependencies
 
-- Apache MINA SSHD 2.12.1
-- EdDSA (net.i2p.crypto) 0.3.0
-- SLF4J 2.0.9
+- Apache MINA SSHD
+- BouncyCastle
+- SLF4J
 
 ## How to use it
 
-Make sure you have jre 11+ installed on your system.\
+Make sure you have jre 1.8+ installed on your system.\
 Get [jar-loader.jar](https://xlogistx.io/apps/jar-loader.jar)\
 Get [jssh.jar](https://xlogistx.io/apps/jssh.jar)
 

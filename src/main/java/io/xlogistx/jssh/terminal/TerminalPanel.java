@@ -1503,7 +1503,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             if (y < ey) sb.append('\n');
         }
         
-        String text = sb.toString().stripTrailing();
+        String text = sb.toString().replaceAll("\\s+$", "");
         
         if (!text.isEmpty()) {
             Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
@@ -1591,7 +1591,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     public String getScreenText() {
         StringBuilder sb = new StringBuilder();
         for (int y = 0; y < rows; y++) {
-            sb.append(new String(screen[y]).stripTrailing());
+            sb.append(new String(screen[y]).replaceAll("\\s+$", ""));
             if (y < rows - 1) sb.append('\n');
         }
         return sb.toString();

@@ -3,6 +3,7 @@ package io.xlogistx.jssh.ui;
 import io.xlogistx.jssh.sftp.SFTPPanel;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import io.xlogistx.jssh.terminal.TerminalPanel;
+import org.apache.sshd.client.channel.ChannelShell;
 
 import javax.swing.*;
 import java.awt.*;
@@ -245,7 +246,7 @@ public class MainFrame extends JFrame {
     
     public void connectWithPassword(String host, int port, String username, String password) {
         // Create connection in background thread
-        SwingWorker<SessionTab, Void> worker = new SwingWorker<>() {
+        SwingWorker<SessionTab, Void> worker = new SwingWorker<SessionTab, Void>() {
             private String error = null;
             
             @Override
@@ -280,7 +281,7 @@ public class MainFrame extends JFrame {
                     TerminalPanel terminal = new TerminalPanel(80, 24);
                     
                     // Open shell
-                    var shell = conn.openShell("xterm-256color", 80, 24);
+                    ChannelShell shell = conn.openShell("xterm-256color", 80, 24);
                     
                     // Connect streams
                     terminal.setOutputStream(shell.getInvertedIn());

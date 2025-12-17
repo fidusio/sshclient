@@ -1,5 +1,7 @@
 package io.xlogistx.jssh.ui;
 
+import org.zoxweb.server.io.IOUtil;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -125,7 +127,7 @@ public class KeyManagerDialog extends JDialog {
                 return "No public key";
             }
             
-            String content = Files.readString(pubFile.toPath()).trim();
+            String content = IOUtil.pathToString(pubFile.toPath()).trim();
             String[] parts = content.split("\\s+");
             if (parts.length >= 2) {
                 byte[] keyData = Base64.getDecoder().decode(parts[1]);
@@ -334,7 +336,7 @@ public class KeyManagerDialog extends JDialog {
         }
         
         try {
-            String content = Files.readString(pubFile.toPath());
+            String content = IOUtil.pathToString(pubFile.toPath());
             
             JTextArea textArea = new JTextArea(content);
             textArea.setEditable(false);

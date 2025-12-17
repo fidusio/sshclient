@@ -18,6 +18,7 @@ import java.io.*;
 import java.net.SocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.util.Base64;
@@ -171,7 +172,7 @@ public class SSHConnection {
     }
 
     private KeyPair loadKeyPair(String keyFile, String passphrase) throws IOException {
-        Path path = Path.of(keyFile.replace("~", System.getProperty("user.home")));
+        Path path = Paths.get(keyFile.replace("~", System.getProperty("user.home")));
 
         if (!Files.exists(path)) {
             throw new IOException("Key file not found: " + keyFile);

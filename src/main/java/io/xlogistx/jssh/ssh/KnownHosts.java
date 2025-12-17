@@ -93,8 +93,8 @@ public class KnownHosts {
         
         // Append to file
         String line = hostEntry + " " + keyType + " " + keyData + "\n";
-        Files.writeString(knownHostsFile, line, 
-            StandardOpenOption.CREATE, 
+        Files.write(knownHostsFile, line.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE,
             StandardOpenOption.APPEND);
         
         // Update cache
