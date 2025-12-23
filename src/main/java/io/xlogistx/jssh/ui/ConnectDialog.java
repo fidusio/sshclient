@@ -2,6 +2,7 @@ package io.xlogistx.jssh.ui;
 
 import io.xlogistx.jssh.config.ConnectionConfig;
 import io.xlogistx.jssh.config.ConnectionManager;
+import io.xlogistx.jssh.config.KnownHostsManager;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import io.xlogistx.jssh.terminal.TerminalPanel;
 import org.apache.sshd.client.channel.ChannelShell;
@@ -226,6 +227,7 @@ public class ConnectDialog extends JDialog {
             JOptionPane.showMessageDialog(this, "Profile saved: " + selected,
                     "Saved", JOptionPane.INFORMATION_MESSAGE);
         } catch (IOException e) {
+            e.printStackTrace();
             JOptionPane.showMessageDialog(this, "Failed to save profile: " + e.getMessage(),
                     "Error", JOptionPane.ERROR_MESSAGE);
         }
@@ -264,6 +266,7 @@ public class ConnectDialog extends JDialog {
             JOptionPane.showMessageDialog(this, "Profile saved: " + name,
                     "Saved", JOptionPane.INFORMATION_MESSAGE);
         } catch (IOException e) {
+            e.printStackTrace();
             JOptionPane.showMessageDialog(this, "Failed to save profile: " + e.getMessage(),
                     "Error", JOptionPane.ERROR_MESSAGE);
         }
@@ -286,6 +289,7 @@ public class ConnectDialog extends JDialog {
                 profileCombo.setSelectedItem("<New Connection>");
                 clearFields();
             } catch (IOException e) {
+                e.printStackTrace();
                 JOptionPane.showMessageDialog(this, "Failed to delete profile: " + e.getMessage(),
                         "Error", JOptionPane.ERROR_MESSAGE);
             }
@@ -556,17 +560,65 @@ public class ConnectDialog extends JDialog {
             try {
                 conn = new SSHConnection();
 
-                // Host key verification - this will block for user input via invokeAndWait
+                // Host key verification with known hosts support
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
-                    int result = JOptionPane.showConfirmDialog(this,
-                            "Host key for " + h + ":\n\n" +
-                                    "Type: " + keyType + "\n" +
-                                    "Fingerprint: " + fingerprint + "\n\n" +
-                                    "Accept this key?",
-                            "Host Key Verification",
-                            JOptionPane.YES_NO_OPTION,
-                            JOptionPane.WARNING_MESSAGE);
-                    return result == JOptionPane.YES_OPTION;
+                    KnownHostsManager knownHosts = KnownHostsManager.getInstance();
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+
+                    switch (verifyResult) {
+                        case KNOWN_OK:
+                            // Host key is known and matches - auto accept
+                            return true;
+
+                        case KNOWN_CHANGED:
+                            // Host key has changed - security warning!
+                            String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
+                            int changeResult = JOptionPane.showConfirmDialog(this,
+                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                            "Host: " + h + (p != 22 ? ":" + p : "") + "\n" +
+                                            "Key type: " + keyType + "\n\n" +
+                                            "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                            "New fingerprint:\n" + fingerprint + "\n\n" +
+                                            "This could indicate a man-in-the-middle attack,\n" +
+                                            "or the server's host key has been changed.\n\n" +
+                                            "Accept the new key?",
+                                    "Host Key Changed",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.ERROR_MESSAGE);
+
+                            if (changeResult == JOptionPane.YES_OPTION) {
+                                // Update the stored key
+                                knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                return true;
+                            }
+                            return false;
+
+                        case UNKNOWN:
+                        default:
+                            // New host - show dialog with remember checkbox
+                            JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
+                            Object[] message = {
+                                    "Host key for " + h + (p != 22 ? ":" + p : "") + ":\n\n" +
+                                            "Type: " + keyType + "\n" +
+                                            "Fingerprint: " + fingerprint + "\n\n" +
+                                            "Accept this key?",
+                                    rememberCheckbox
+                            };
+
+                            int result = JOptionPane.showConfirmDialog(this,
+                                    message,
+                                    "Host Key Verification",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE);
+
+                            if (result == JOptionPane.YES_OPTION) {
+                                if (rememberCheckbox.isSelected()) {
+                                    knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                }
+                                return true;
+                            }
+                            return false;
+                    }
                 });
 
                 // Connect (includes host key verification)
@@ -609,6 +661,7 @@ public class ConnectDialog extends JDialog {
                             }
                             x11DisplayNum = Integer.parseInt(dispNum);
                         } catch (NumberFormatException ex) {
+                            ex.printStackTrace();
                             x11DisplayNum = 0;
                         }
                     }
@@ -642,6 +695,7 @@ public class ConnectDialog extends JDialog {
                             finalTerminal.displayMessage("*** Connection closed by remote host ***", 9); // Bright red
                         });
                     } catch (IOException e) {
+                        e.printStackTrace();
                         // Connection error
                         final String errorMsg = e.getMessage();
                         SwingUtilities.invokeLater(() -> {
@@ -663,6 +717,7 @@ public class ConnectDialog extends JDialog {
                 });
 
             } catch (Exception e) {
+                e.printStackTrace();
                 final SSHConnection failedConn = conn;
                 final String errorMsg = e.getMessage();
                 SwingUtilities.invokeLater(() -> {

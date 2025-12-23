@@ -14,6 +14,11 @@ import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.apache.sshd.common.forward.DefaultForwarderFactory;
 
+import org.apache.sshd.common.PropertyResolverUtils;
+import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionListener;
+import org.apache.sshd.core.CoreModuleProperties;
+
 import java.io.*;
 import java.net.SocketAddress;
 import java.nio.file.Files;
@@ -21,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.PublicKey;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
@@ -58,6 +64,14 @@ public class SSHConnection {
 
     public SSHConnection() {
         client = SshClient.setUpDefaultClient();
+
+        // Configure keep-alive at client level
+        // Send heartbeat every 15 seconds to keep connection alive
+        CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, Duration.ofSeconds(15));
+        // No idle timeout - connection stays open until explicitly closed
+        CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ZERO);
+        // No overall timeout
+        CoreModuleProperties.NIO2_READ_TIMEOUT.set(client, Duration.ZERO);
 
         // Enable port forwarding - accept all forwarding requests
         client.setForwarderFactory(DefaultForwarderFactory.INSTANCE);
@@ -123,7 +137,43 @@ public class SSHConnection {
         }
 
         session = connectFuture.getSession();
-        session.setSessionHeartbeat(SessionHeartbeatController.HeartbeatType.IGNORE, TimeUnit.SECONDS, 30);
+
+        // Configure session-level keep-alive settings
+        // Use IGNORE heartbeat type - sends SSH_MSG_IGNORE packets every 15 seconds
+        session.setSessionHeartbeat(SessionHeartbeatController.HeartbeatType.IGNORE, TimeUnit.SECONDS, 15);
+
+        // Set session-level timeouts to prevent disconnection
+        CoreModuleProperties.IDLE_TIMEOUT.set(session, Duration.ZERO);  // No idle timeout
+        CoreModuleProperties.NIO2_READ_TIMEOUT.set(session, Duration.ZERO);  // No read timeout
+
+        // Add session listener to detect disconnections
+        session.addSessionListener(new SessionListener() {
+            @Override
+            public void sessionDisconnect(Session session, int reason, String msg, String language, boolean initiator) {
+                connected = false;
+                if (listener != null) {
+                    String disconnectReason = initiator ? "Disconnected by client" :
+                            "Disconnected by server: " + (msg != null ? msg : "reason code " + reason);
+                    listener.onDisconnected(disconnectReason);
+                }
+            }
+
+            @Override
+            public void sessionClosed(Session session) {
+                boolean wasConnected = connected;
+                connected = false;
+                if (listener != null && wasConnected) {
+                    listener.onDisconnected("Session closed unexpectedly");
+                }
+            }
+
+            @Override
+            public void sessionException(Session session, Throwable t) {
+                if (listener != null) {
+                    listener.onError("Session error: " + t.getMessage());
+                }
+            }
+        });
 
         serverVersion = session.getServerVersion();
         connected = true;

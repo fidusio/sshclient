@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.ui;
 
+import io.xlogistx.jssh.config.KnownHostsManager;
 import io.xlogistx.jssh.sftp.SFTPPanel;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import io.xlogistx.jssh.terminal.TerminalPanel;
@@ -253,17 +254,65 @@ public class MainFrame extends JFrame {
             protected SessionTab doInBackground() {
                 SSHConnection conn = new SSHConnection();
                 
-                // Host key verification
+                // Host key verification with known hosts support
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
-                    int result = JOptionPane.showConfirmDialog(MainFrame.this,
-                        "Host key for " + h + ":\n\n" +
-                        "Type: " + keyType + "\n" +
-                        "Fingerprint: " + fingerprint + "\n\n" +
-                        "Accept this key?",
-                        "Host Key Verification",
-                        JOptionPane.YES_NO_OPTION,
-                        JOptionPane.WARNING_MESSAGE);
-                    return result == JOptionPane.YES_OPTION;
+                    KnownHostsManager knownHosts = KnownHostsManager.getInstance();
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+
+                    switch (verifyResult) {
+                        case KNOWN_OK:
+                            // Host key is known and matches - auto accept
+                            return true;
+
+                        case KNOWN_CHANGED:
+                            // Host key has changed - security warning!
+                            String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
+                            int changeResult = JOptionPane.showConfirmDialog(MainFrame.this,
+                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                            "Host: " + h + (p != 22 ? ":" + p : "") + "\n" +
+                                            "Key type: " + keyType + "\n\n" +
+                                            "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                            "New fingerprint:\n" + fingerprint + "\n\n" +
+                                            "This could indicate a man-in-the-middle attack,\n" +
+                                            "or the server's host key has been changed.\n\n" +
+                                            "Accept the new key?",
+                                    "Host Key Changed",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.ERROR_MESSAGE);
+
+                            if (changeResult == JOptionPane.YES_OPTION) {
+                                // Update the stored key
+                                knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                return true;
+                            }
+                            return false;
+
+                        case UNKNOWN:
+                        default:
+                            // New host - show dialog with remember checkbox
+                            JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
+                            Object[] message = {
+                                    "Host key for " + h + (p != 22 ? ":" + p : "") + ":\n\n" +
+                                            "Type: " + keyType + "\n" +
+                                            "Fingerprint: " + fingerprint + "\n\n" +
+                                            "Accept this key?",
+                                    rememberCheckbox
+                            };
+
+                            int result = JOptionPane.showConfirmDialog(MainFrame.this,
+                                    message,
+                                    "Host Key Verification",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE);
+
+                            if (result == JOptionPane.YES_OPTION) {
+                                if (rememberCheckbox.isSelected()) {
+                                    knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                }
+                                return true;
+                            }
+                            return false;
+                    }
                 });
                 
                 try {
