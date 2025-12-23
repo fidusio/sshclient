@@ -17,9 +17,11 @@ import java.util.List;
  * Main application frame for JSSH
  */
 public class MainFrame extends JFrame {
+
+    public static final String VERSION = "1.0.5";
     
     private JTabbedPane tabbedPane;
-    private List<SessionTab> sessions = new ArrayList<>();
+    private final List<SessionTab> sessions = new ArrayList<>();
     private JLabel statusLabel;
     
     public MainFrame() {
@@ -579,7 +581,7 @@ public class MainFrame extends JFrame {
     private void showAbout() {
         JOptionPane.showMessageDialog(this,
             "JSSH - Java SSH Client\n\n" +
-            "Version 1.0.0\n\n" +
+            "Version " + VERSION + "\n\n" +
             "A modern SSH client using Apache MINA SSHD\n\n" +
             "Features:\n" +
             "• Ed25519, ECDSA, RSA key support\n" +
@@ -604,9 +606,9 @@ public class MainFrame extends JFrame {
      * Session tab containing connection and terminal
      */
     public static class SessionTab {
-        private SSHConnection connection;
-        private TerminalPanel terminal;
-        private JPanel panel;
+        private final SSHConnection connection;
+        private final TerminalPanel terminal;
+        private final JPanel panel;
         private String title;
         
         public SessionTab(SSHConnection connection, TerminalPanel terminal) {
@@ -655,8 +657,8 @@ public class MainFrame extends JFrame {
     /**
      * Detached window for a terminal session
      */
-    public class DetachedSessionFrame extends JFrame {
-        private SessionTab session;
+    public static class DetachedSessionFrame extends JFrame {
+        private final SessionTab session;
         private JLabel statusLabel;
         private JSplitPane splitPane;
         private SFTPPanel sftpPanel;
