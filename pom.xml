@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>jssh</artifactId>
-    <version>1.0.6</version>
+    <version>1.0.7</version>
     <packaging>jar</packaging>
 
     <name>JSSH - Java SSH Client</name>
@@ -77,6 +77,22 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>jssh-version.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>jssh-version.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

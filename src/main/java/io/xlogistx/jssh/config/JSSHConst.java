@@ -3,6 +3,8 @@ package io.xlogistx.jssh.config;
 import org.zoxweb.shared.app.AppVersionDAO;
 
 import java.awt.Color;
+import java.io.InputStream;
+import java.util.Properties;
 
 /**
  * Central constants class for the JSSH application.
@@ -17,8 +19,23 @@ public final class JSSHConst {
     /** Application name */
     public static final String APP_NAME = "JSSH - Java SSH Client";
 
-    /** Application version */
-    public static final AppVersionDAO VERSION = new AppVersionDAO("JSSHClient::1.0.6");
+    /** Application version - loaded from Maven-filtered properties file */
+    public static final AppVersionDAO VERSION;
+
+    // Static initializer to load version from properties file
+    static {
+        String version = "1.0.7"; // fallback default
+        try (InputStream is = JSSHConst.class.getResourceAsStream("/jssh-version.properties")) {
+            if (is != null) {
+                Properties props = new Properties();
+                props.load(is);
+                version = props.getProperty("jssh.version", version);
+            }
+        } catch (Exception e) {
+            // Use fallback version if properties file not found
+        }
+        VERSION = new AppVersionDAO("JSSHClient::" + version);
+    }
 
     // ============================================
     // SSH CONFIGURATION
