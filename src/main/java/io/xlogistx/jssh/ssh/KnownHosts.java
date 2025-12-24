@@ -1,5 +1,7 @@
 package io.xlogistx.jssh.ssh;
 
+import io.xlogistx.jssh.config.JSSHConst;
+
 import java.io.*;
 import java.nio.file.*;
 import java.security.MessageDigest;
@@ -16,7 +18,7 @@ public class KnownHosts {
     
     public KnownHosts() {
         String homeDir = System.getProperty("user.home");
-        knownHostsFile = Paths.get(homeDir, ".ssh", "known_hosts");
+        knownHostsFile = Paths.get(homeDir, JSSHConst.SSH_DIR, JSSHConst.KNOWN_HOSTS_FILE);
         load();
     }
     
@@ -60,18 +62,18 @@ public class KnownHosts {
      */
     public VerifyResult verify(String host, int port, String keyType, String keyData) {
         String key = formatHost(host, port) + ":" + keyType;
-        
+
         String storedKey = hosts.get(key);
         if (storedKey == null) {
             // Also check without port for standard port 22
-            if (port == 22) {
+            if (port == JSSHConst.DEFAULT_SSH_PORT) {
                 storedKey = hosts.get(host + ":" + keyType);
             }
             if (storedKey == null) {
                 return VerifyResult.UNKNOWN;
             }
         }
-        
+
         if (storedKey.equals(keyData)) {
             return VerifyResult.MATCH;
         } else {
@@ -152,7 +154,7 @@ public class KnownHosts {
     }
     
     private String formatHost(String host, int port) {
-        if (port == 22) {
+        if (port == JSSHConst.DEFAULT_SSH_PORT) {
             return host;
         }
         return "[" + host + "]:" + port;
@@ -163,9 +165,9 @@ public class KnownHosts {
      */
     public static String getFingerprint(PublicKey key) {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            MessageDigest md = MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
             byte[] digest = md.digest(key.getEncoded());
-            return "SHA256:" + Base64.getEncoder().encodeToString(digest)
+            return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest)
                                      .replace("=", "");
         } catch (Exception e) {
             return "unknown";

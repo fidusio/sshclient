@@ -11,15 +11,15 @@ public class ConnectionConfig implements Serializable {
 
     private String name;           // Profile name
     private String host;
-    private int port = 22;
+    private int port = JSSHConst.DEFAULT_SSH_PORT;
     private String username;
     private boolean useKeyAuth = false;
     private String keyFile;
-    private String terminalType = "xterm-256color";
-    private int columns = 80;
-    private int rows = 24;
+    private String terminalType = JSSHConst.DEFAULT_TERMINAL_TYPE;
+    private int columns = JSSHConst.DEFAULT_TERMINAL_COLS;
+    private int rows = JSSHConst.DEFAULT_TERMINAL_ROWS;
     private boolean x11Forwarding = false;
-    private String x11Display = "localhost:0";
+    private String x11Display = JSSHConst.DEFAULT_X11_DISPLAY;
 
     // Tunnel configurations (stored as comma-separated strings)
     private String localTunnels = "";   // Format: "localPort:remoteHost:remotePort,..."
@@ -148,11 +148,11 @@ public class ConnectionConfig implements Serializable {
         props.setProperty("username", username != null ? username : "");
         props.setProperty("useKeyAuth", String.valueOf(useKeyAuth));
         props.setProperty("keyFile", keyFile != null ? keyFile : "");
-        props.setProperty("terminalType", terminalType != null ? terminalType : "xterm-256color");
+        props.setProperty("terminalType", terminalType != null ? terminalType : JSSHConst.DEFAULT_TERMINAL_TYPE);
         props.setProperty("columns", String.valueOf(columns));
         props.setProperty("rows", String.valueOf(rows));
         props.setProperty("x11Forwarding", String.valueOf(x11Forwarding));
-        props.setProperty("x11Display", x11Display != null ? x11Display : "localhost:0");
+        props.setProperty("x11Display", x11Display != null ? x11Display : JSSHConst.DEFAULT_X11_DISPLAY);
         props.setProperty("localTunnels", localTunnels != null ? localTunnels : "");
         props.setProperty("remoteTunnels", remoteTunnels != null ? remoteTunnels : "");
         return props;
@@ -165,15 +165,15 @@ public class ConnectionConfig implements Serializable {
         ConnectionConfig config = new ConnectionConfig();
         config.name = props.getProperty("name", "");
         config.host = props.getProperty("host", "");
-        config.port = Integer.parseInt(props.getProperty("port", "22"));
+        config.port = Integer.parseInt(props.getProperty("port", String.valueOf(JSSHConst.DEFAULT_SSH_PORT)));
         config.username = props.getProperty("username", "");
         config.useKeyAuth = Boolean.parseBoolean(props.getProperty("useKeyAuth", "false"));
         config.keyFile = props.getProperty("keyFile", "");
-        config.terminalType = props.getProperty("terminalType", "xterm-256color");
-        config.columns = Integer.parseInt(props.getProperty("columns", "80"));
-        config.rows = Integer.parseInt(props.getProperty("rows", "24"));
+        config.terminalType = props.getProperty("terminalType", JSSHConst.DEFAULT_TERMINAL_TYPE);
+        config.columns = Integer.parseInt(props.getProperty("columns", String.valueOf(JSSHConst.DEFAULT_TERMINAL_COLS)));
+        config.rows = Integer.parseInt(props.getProperty("rows", String.valueOf(JSSHConst.DEFAULT_TERMINAL_ROWS)));
         config.x11Forwarding = Boolean.parseBoolean(props.getProperty("x11Forwarding", "false"));
-        config.x11Display = props.getProperty("x11Display", "localhost:0");
+        config.x11Display = props.getProperty("x11Display", JSSHConst.DEFAULT_X11_DISPLAY);
         config.localTunnels = props.getProperty("localTunnels", "");
         config.remoteTunnels = props.getProperty("remoteTunnels", "");
         return config;

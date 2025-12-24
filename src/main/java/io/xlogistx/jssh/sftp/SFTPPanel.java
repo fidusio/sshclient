@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.sftp;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClient.DirEntry;
@@ -28,7 +29,7 @@ public class SFTPPanel extends JPanel {
     private JLabel localInfoLabel;
     
     // Remote side
-    private String remotePath = "/";
+    private String remotePath = JSSHConst.SFTP_DEFAULT_REMOTE_PATH;
     private JComboBox<String> remotePathCombo;
     private JList<FileItem> remoteList;
     private DefaultListModel<FileItem> remoteListModel;
@@ -47,7 +48,7 @@ public class SFTPPanel extends JPanel {
         try {
             remotePath = sftpClient.canonicalPath(".");
         } catch (Exception e) {
-            remotePath = "/";
+            remotePath = JSSHConst.SFTP_DEFAULT_REMOTE_PATH;
         }
         
         setLayout(new BorderLayout(5, 5));
@@ -576,7 +577,7 @@ public class SFTPPanel extends JPanel {
                     publish(++processedFiles);
                     try (InputStream is = new FileInputStream(file);
                          OutputStream os = sftpClient.write(rPath)) {
-                        byte[] buf = new byte[32768];
+                        byte[] buf = new byte[JSSHConst.SFTP_BUFFER_SIZE];
                         int n;
                         while ((n = is.read(buf)) > 0) {
                             os.write(buf, 0, n);
@@ -666,7 +667,7 @@ public class SFTPPanel extends JPanel {
                     publish(++processedFiles);
                     try (InputStream is = sftpClient.read(rPath);
                          OutputStream os = new FileOutputStream(localFile)) {
-                        byte[] buf = new byte[32768];
+                        byte[] buf = new byte[JSSHConst.SFTP_BUFFER_SIZE];
                         int n;
                         while ((n = is.read(buf)) > 0) {
                             os.write(buf, 0, n);

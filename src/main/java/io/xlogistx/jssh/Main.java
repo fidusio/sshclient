@@ -1,5 +1,6 @@
 package io.xlogistx.jssh;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.ui.MainFrame;
 import javax.swing.*;
 
@@ -19,7 +20,7 @@ public class Main {
         // Parse command line arguments
         String host = null;
         String user = null;
-        int port = 22;
+        int port = JSSHConst.DEFAULT_SSH_PORT;
         
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("-h") || args[i].equals("--host")) {

@@ -2,6 +2,7 @@ package io.xlogistx.jssh.ui;
 
 import io.xlogistx.jssh.config.ConnectionConfig;
 import io.xlogistx.jssh.config.ConnectionManager;
+import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.config.KnownHostsManager;
 import io.xlogistx.jssh.ssh.SSHConnection;
 import io.xlogistx.jssh.terminal.TerminalPanel;
@@ -42,7 +43,7 @@ public class ConnectDialog extends JDialog {
         connectionManager = ConnectionManager.getInstance();
         initUI();
         pack();
-        setMinimumSize(new Dimension(500, 400));
+        setMinimumSize(new Dimension(JSSHConst.CONNECT_DIALOG_MIN_WIDTH, JSSHConst.CONNECT_DIALOG_MIN_HEIGHT));
         setLocationRelativeTo(owner);
     }
 
@@ -130,7 +131,7 @@ public class ConnectDialog extends JDialog {
         loadingProfile = true;
         String selected = (String) profileCombo.getSelectedItem();
         profileCombo.removeAllItems();
-        profileCombo.addItem("<New Connection>");
+        profileCombo.addItem(JSSHConst.NEW_CONNECTION_LABEL);
 
         List<String> names = connectionManager.getConnectionNames();
         for (String name : names) {
@@ -145,7 +146,7 @@ public class ConnectDialog extends JDialog {
 
     private void loadSelectedProfile() {
         String selected = (String) profileCombo.getSelectedItem();
-        if (selected == null || selected.equals("<New Connection>")) {
+        if (selected == null || selected.equals(JSSHConst.NEW_CONNECTION_LABEL)) {
             clearFields();
             return;
         }
@@ -168,7 +169,7 @@ public class ConnectDialog extends JDialog {
         colsSpinner.setValue(config.getColumns());
         rowsSpinner.setValue(config.getRows());
         x11ForwardingCheckbox.setSelected(config.isX11Forwarding());
-        x11DisplayField.setText(config.getX11Display() != null ? config.getX11Display() : "localhost:0");
+        x11DisplayField.setText(config.getX11Display() != null ? config.getX11Display() : JSSHConst.DEFAULT_X11_DISPLAY);
 
         updateKeyFields();
         updateX11Fields();
@@ -180,17 +181,17 @@ public class ConnectDialog extends JDialog {
         loadingProfile = true;
 
         hostField.setText("");
-        portSpinner.setValue(22);
+        portSpinner.setValue(JSSHConst.DEFAULT_SSH_PORT);
         usernameField.setText(System.getProperty("user.name"));
         passwordField.setText("");
         useKeyAuth.setSelected(false);
         keyFileField.setText(getDefaultKeyFile());
         passphraseField.setText("");
-        termTypeCombo.setSelectedItem("xterm-256color");
-        colsSpinner.setValue(80);
-        rowsSpinner.setValue(24);
+        termTypeCombo.setSelectedItem(JSSHConst.DEFAULT_TERMINAL_TYPE);
+        colsSpinner.setValue(JSSHConst.DEFAULT_TERMINAL_COLS);
+        rowsSpinner.setValue(JSSHConst.DEFAULT_TERMINAL_ROWS);
         x11ForwardingCheckbox.setSelected(false);
-        x11DisplayField.setText(System.getenv("DISPLAY") != null ? System.getenv("DISPLAY") : "localhost:0");
+        x11DisplayField.setText(System.getenv("DISPLAY") != null ? System.getenv("DISPLAY") : JSSHConst.DEFAULT_X11_DISPLAY);
 
         updateKeyFields();
         updateX11Fields();
@@ -215,7 +216,7 @@ public class ConnectDialog extends JDialog {
 
     private void saveProfile() {
         String selected = (String) profileCombo.getSelectedItem();
-        if (selected == null || selected.equals("<New Connection>")) {
+        if (selected == null || selected.equals(JSSHConst.NEW_CONNECTION_LABEL)) {
             saveProfileAs();
             return;
         }
@@ -274,7 +275,7 @@ public class ConnectDialog extends JDialog {
 
     private void deleteProfile() {
         String selected = (String) profileCombo.getSelectedItem();
-        if (selected == null || selected.equals("<New Connection>")) {
+        if (selected == null || selected.equals(JSSHConst.NEW_CONNECTION_LABEL)) {
             return;
         }
 
@@ -286,7 +287,7 @@ public class ConnectDialog extends JDialog {
             try {
                 connectionManager.delete(selected);
                 refreshProfiles();
-                profileCombo.setSelectedItem("<New Connection>");
+                profileCombo.setSelectedItem(JSSHConst.NEW_CONNECTION_LABEL);
                 clearFields();
             } catch (IOException e) {
                 e.printStackTrace();
@@ -298,9 +299,9 @@ public class ConnectDialog extends JDialog {
 
     private String getDefaultKeyFile() {
         String homeDir = System.getProperty("user.home");
-        File defaultKey = new File(homeDir, ".ssh/id_ed25519");
+        File defaultKey = new File(homeDir, JSSHConst.DEFAULT_KEY_ED25519);
         if (!defaultKey.exists()) {
-            defaultKey = new File(homeDir, ".ssh/id_rsa");
+            defaultKey = new File(homeDir, JSSHConst.DEFAULT_KEY_RSA);
         }
         return defaultKey.exists() ? defaultKey.getAbsolutePath() : "";
     }
@@ -329,7 +330,7 @@ public class ConnectDialog extends JDialog {
         panel.add(new JLabel("Port:"), gbc);
 
         gbc.gridx = 3;
-        portSpinner = new JSpinner(new SpinnerNumberModel(22, 1, 65535, 1));
+        portSpinner = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_SSH_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
         panel.add(portSpinner, gbc);
 
         // Username
@@ -418,9 +419,7 @@ public class ConnectDialog extends JDialog {
 
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        termTypeCombo = new JComboBox<>(new String[]{
-                "xterm-256color", "xterm", "vt100", "vt220", "linux", "ansi"
-        });
+        termTypeCombo = new JComboBox<>(JSSHConst.TERMINAL_TYPES);
         panel.add(termTypeCombo, gbc);
 
         // Size
@@ -430,7 +429,7 @@ public class ConnectDialog extends JDialog {
         panel.add(new JLabel("Columns:"), gbc);
 
         gbc.gridx = 1;
-        colsSpinner = new JSpinner(new SpinnerNumberModel(80, 40, 320, 1));
+        colsSpinner = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.MIN_TERMINAL_COLS, JSSHConst.MAX_TERMINAL_COLS, 1));
         panel.add(colsSpinner, gbc);
 
         gbc.gridx = 0;
@@ -438,7 +437,7 @@ public class ConnectDialog extends JDialog {
         panel.add(new JLabel("Rows:"), gbc);
 
         gbc.gridx = 1;
-        rowsSpinner = new JSpinner(new SpinnerNumberModel(24, 10, 100, 1));
+        rowsSpinner = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TERMINAL_ROWS, JSSHConst.MIN_TERMINAL_ROWS, JSSHConst.MAX_TERMINAL_ROWS, 1));
         panel.add(rowsSpinner, gbc);
 
         // X11 Forwarding section
@@ -460,7 +459,7 @@ public class ConnectDialog extends JDialog {
 
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        x11DisplayField = new JTextField("localhost:0");
+        x11DisplayField = new JTextField(JSSHConst.DEFAULT_X11_DISPLAY);
         x11DisplayField.setEnabled(false);
         x11DisplayField.setToolTipText("X11 display (e.g., localhost:0, :0, or IP:display)");
 
@@ -575,7 +574,7 @@ public class ConnectDialog extends JDialog {
                             String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
                             int changeResult = JOptionPane.showConfirmDialog(this,
                                     "WARNING: HOST KEY HAS CHANGED!\n\n" +
-                                            "Host: " + h + (p != 22 ? ":" + p : "") + "\n" +
+                                            "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
                                             "Key type: " + keyType + "\n\n" +
                                             "Old fingerprint:\n" + oldFingerprint + "\n\n" +
                                             "New fingerprint:\n" + fingerprint + "\n\n" +
@@ -598,7 +597,7 @@ public class ConnectDialog extends JDialog {
                             // New host - show dialog with remember checkbox
                             JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
                             Object[] message = {
-                                    "Host key for " + h + (p != 22 ? ":" + p : "") + ":\n\n" +
+                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
                                             "Type: " + keyType + "\n" +
                                             "Fingerprint: " + fingerprint + "\n\n" +
                                             "Accept this key?",
@@ -681,7 +680,7 @@ public class ConnectDialog extends JDialog {
                 final SSHConnection finalConn = conn;
                 final TerminalPanel finalTerminal = terminal;
                 Thread reader = new Thread(() -> {
-                    byte[] buf = new byte[8192];
+                    byte[] buf = new byte[JSSHConst.SHELL_READ_BUFFER_SIZE];
                     try {
                         InputStream in = shell.getInvertedOut();
                         int n;

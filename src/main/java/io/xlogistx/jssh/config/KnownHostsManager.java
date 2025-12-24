@@ -12,8 +12,6 @@ import java.util.*;
  */
 public class KnownHostsManager {
 
-    private static final String CONFIG_DIR = ".jssh";
-    private static final String KNOWN_HOSTS_FILE = "known_hosts";
     private static KnownHostsManager instance;
 
     private Path knownHostsPath;
@@ -49,8 +47,8 @@ public class KnownHostsManager {
 
     private KnownHostsManager() {
         String home = System.getProperty("user.home");
-        Path configDir = Paths.get(home, CONFIG_DIR);
-        knownHostsPath = configDir.resolve(KNOWN_HOSTS_FILE);
+        Path configDir = Paths.get(home, JSSHConst.CONFIG_DIR);
+        knownHostsPath = configDir.resolve(JSSHConst.KNOWN_HOSTS_FILE);
 
         try {
             Files.createDirectories(configDir);
@@ -72,7 +70,7 @@ public class KnownHostsManager {
      * Create a host key string from host and port
      */
     private String makeHostKey(String host, int port) {
-        if (port == 22) {
+        if (port == JSSHConst.DEFAULT_SSH_PORT) {
             return host.toLowerCase();
         }
         return "[" + host.toLowerCase() + "]:" + port;
@@ -202,9 +200,9 @@ public class KnownHostsManager {
      */
     public static String calculateFingerprint(PublicKey key) {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            MessageDigest md = MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
             byte[] digest = md.digest(key.getEncoded());
-            return "SHA256:" + Base64.getEncoder().encodeToString(digest).replace("=", "");
+            return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest).replace("=", "");
         } catch (Exception e) {
             return "unknown";
         }

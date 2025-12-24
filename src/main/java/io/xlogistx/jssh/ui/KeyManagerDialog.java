@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.ui;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import org.zoxweb.server.io.IOUtil;
 
 import javax.swing.*;
@@ -23,13 +24,13 @@ public class KeyManagerDialog extends JDialog {
     
     public KeyManagerDialog(Frame owner) {
         super(owner, "SSH Key Manager", true);
-        
-        sshDir = System.getProperty("user.home") + File.separator + ".ssh";
-        
+
+        sshDir = System.getProperty("user.home") + File.separator + JSSHConst.SSH_DIR;
+
         initUI();
         loadKeys();
-        
-        setSize(600, 400);
+
+        setSize(JSSHConst.KEY_MANAGER_WIDTH, JSSHConst.KEY_MANAGER_HEIGHT);
         setLocationRelativeTo(owner);
     }
     
@@ -126,14 +127,14 @@ public class KeyManagerDialog extends JDialog {
             if (!pubFile.exists()) {
                 return "No public key";
             }
-            
+
             String content = IOUtil.pathToString(pubFile.toPath()).trim();
             String[] parts = content.split("\\s+");
             if (parts.length >= 2) {
                 byte[] keyData = Base64.getDecoder().decode(parts[1]);
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
+                MessageDigest md = MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
                 byte[] digest = md.digest(keyData);
-                return "SHA256:" + Base64.getEncoder().encodeToString(digest)
+                return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest)
                                          .replace("=", "")
                                          .substring(0, 43);
             }
@@ -162,9 +163,9 @@ public class KeyManagerDialog extends JDialog {
         // Filename
         gbc.gridx = 0; gbc.gridy = 1;
         panel.add(new JLabel("Filename:"), gbc);
-        
+
         gbc.gridx = 1;
-        JTextField nameField = new JTextField("id_ed25519", 20);
+        JTextField nameField = new JTextField(JSSHConst.DEFAULT_KEY_NAME, 20);
         panel.add(nameField, gbc);
         
         // Passphrase
@@ -250,7 +251,7 @@ public class KeyManagerDialog extends JDialog {
             
             if (keyType.equals("rsa")) {
                 pb.command().add("-b");
-                pb.command().add("4096");
+                pb.command().add(String.valueOf(JSSHConst.RSA_KEY_BITS));
             }
             
             pb.redirectErrorStream(true);

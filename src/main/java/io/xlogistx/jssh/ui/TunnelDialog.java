@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.ui;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.ssh.SSHConnection;
 
 import javax.swing.*;
@@ -22,9 +23,9 @@ public class TunnelDialog extends JDialog {
     public TunnelDialog(Frame owner, SSHConnection connection) {
         super(owner, "Port Tunnels", true);
         this.connection = connection;
-        
+
         initUI();
-        setSize(500, 400);
+        setSize(JSSHConst.TUNNEL_DIALOG_WIDTH, JSSHConst.TUNNEL_DIALOG_HEIGHT);
         setLocationRelativeTo(owner);
     }
     
@@ -88,9 +89,9 @@ public class TunnelDialog extends JDialog {
         // Input fields
         JPanel inputPanel = new JPanel(new GridLayout(3, 2, 5, 5));
 
-        JSpinner localPort = new JSpinner(new SpinnerNumberModel(8080, 1, 65535, 1));
-        JTextField remoteHost = new JTextField("localhost");
-        JSpinner remotePort = new JSpinner(new SpinnerNumberModel(80, 1, 65535, 1));
+        JSpinner localPort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_LOCAL_TUNNEL_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
+        JTextField remoteHost = new JTextField(JSSHConst.DEFAULT_TUNNEL_HOST);
+        JSpinner remotePort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TARGET_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
 
         inputPanel.add(new JLabel("Local Port (listen on):"));
         inputPanel.add(localPort);
@@ -162,9 +163,9 @@ public class TunnelDialog extends JDialog {
         // Input fields
         JPanel inputPanel = new JPanel(new GridLayout(3, 2, 5, 5));
 
-        JSpinner remotePort = new JSpinner(new SpinnerNumberModel(8080, 1, 65535, 1));
-        JTextField localHost = new JTextField("localhost");
-        JSpinner localPort = new JSpinner(new SpinnerNumberModel(80, 1, 65535, 1));
+        JSpinner remotePort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_REMOTE_TUNNEL_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
+        JTextField localHost = new JTextField(JSSHConst.DEFAULT_TUNNEL_HOST);
+        JSpinner localPort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TARGET_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
 
         inputPanel.add(new JLabel("Remote Port (listen on server):"));
         inputPanel.add(remotePort);

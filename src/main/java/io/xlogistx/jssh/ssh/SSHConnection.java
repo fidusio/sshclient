@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.ssh;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.channel.ChannelExec;
 import org.apache.sshd.client.channel.ChannelShell;
@@ -67,7 +68,7 @@ public class SSHConnection {
 
         // Configure keep-alive at client level
         // Send heartbeat every 15 seconds to keep connection alive
-        CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, Duration.ofSeconds(15));
+        CoreModuleProperties.HEARTBEAT_INTERVAL.set(client, Duration.ofSeconds(JSSHConst.HEARTBEAT_INTERVAL_SECONDS));
         // No idle timeout - connection stays open until explicitly closed
         CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ZERO);
         // No overall timeout
@@ -140,7 +141,7 @@ public class SSHConnection {
 
         // Configure session-level keep-alive settings
         // Use IGNORE heartbeat type - sends SSH_MSG_IGNORE packets every 15 seconds
-        session.setSessionHeartbeat(SessionHeartbeatController.HeartbeatType.IGNORE, TimeUnit.SECONDS, 15);
+        session.setSessionHeartbeat(SessionHeartbeatController.HeartbeatType.IGNORE, TimeUnit.SECONDS, JSSHConst.HEARTBEAT_INTERVAL_SECONDS);
 
         // Set session-level timeouts to prevent disconnection
         CoreModuleProperties.IDLE_TIMEOUT.set(session, Duration.ZERO);  // No idle timeout
@@ -276,15 +277,15 @@ public class SSHConnection {
         shellChannel.setPtyType(termType);
         shellChannel.setPtyColumns(cols);
         shellChannel.setPtyLines(rows);
-        shellChannel.setPtyWidth(cols * 8);
-        shellChannel.setPtyHeight(rows * 16);
+        shellChannel.setPtyWidth(cols * JSSHConst.DEFAULT_CHAR_WIDTH);
+        shellChannel.setPtyHeight(rows * JSSHConst.DEFAULT_CHAR_HEIGHT);
 
         // Configure X11 forwarding if requested
         if (x11Forwarding) {
             configureX11Forwarding(shellChannel, x11Host, x11Display);
         }
 
-        shellChannel.open().verify(30, TimeUnit.SECONDS);
+        shellChannel.open().verify(JSSHConst.SHELL_OPEN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         return shellChannel;
     }
@@ -371,7 +372,7 @@ public class SSHConnection {
             if (os.contains("win")) {
                 // Check common X server ports
                 try (java.net.Socket socket = new java.net.Socket()) {
-                    socket.connect(new java.net.InetSocketAddress("localhost", 6000), 100);
+                    socket.connect(new java.net.InetSocketAddress("localhost", JSSHConst.X_SERVER_PORT), JSSHConst.X11_SOCKET_TIMEOUT_MS);
                     return true;
                 } catch (Exception e) {
                     return false;
@@ -394,7 +395,7 @@ public class SSHConnection {
         channel.setOut(stdout);
         channel.setErr(stderr);
 
-        channel.open().verify(30, TimeUnit.SECONDS);
+        channel.open().verify(JSSHConst.EXEC_CHANNEL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), timeoutMs);
 
@@ -440,7 +441,7 @@ public class SSHConnection {
      */
     public void resizeTerminal(int cols, int rows) throws IOException {
         if (shellChannel != null && shellChannel.isOpen()) {
-            shellChannel.sendWindowChange(cols, rows, cols * 8, rows * 16);
+            shellChannel.sendWindowChange(cols, rows, cols * JSSHConst.DEFAULT_CHAR_WIDTH, rows * JSSHConst.DEFAULT_CHAR_HEIGHT);
         }
     }
 
@@ -528,9 +529,9 @@ public class SSHConnection {
 
     private String getFingerprint(PublicKey key) {
         try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
             byte[] digest = md.digest(key.getEncoded());
-            return "SHA256:" + Base64.getEncoder().encodeToString(digest).replace("=", "");
+            return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest).replace("=", "");
         } catch (Exception e) {
             return "unknown";
         }

@@ -1,5 +1,7 @@
 package io.xlogistx.jssh.terminal;
 
+import io.xlogistx.jssh.config.JSSHConst;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -14,10 +16,10 @@ import java.util.List;
  */
 public class TerminalPanel extends JPanel implements KeyListener, MouseListener, MouseMotionListener, MouseWheelListener {
     
-    private int cols = 80;
-    private int rows = 24;
-    private int charWidth = 8;
-    private int charHeight = 16;
+    private int cols = JSSHConst.DEFAULT_TERMINAL_COLS;
+    private int rows = JSSHConst.DEFAULT_TERMINAL_ROWS;
+    private int charWidth = JSSHConst.DEFAULT_CHAR_WIDTH;
+    private int charHeight = JSSHConst.DEFAULT_CHAR_HEIGHT;
     
     private char[][] screen;
     private int[][] colors;
@@ -26,7 +28,6 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     private boolean[][] reverse;  // Reverse video attribute
     
     // Scrollback buffer
-    private static final int MAX_SCROLLBACK = 10000;  // Maximum lines to keep
     private List<char[]> scrollbackChars = new ArrayList<>();
     private List<int[]> scrollbackColors = new ArrayList<>();
     private List<int[]> scrollbackBgColors = new ArrayList<>();
@@ -45,8 +46,8 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     private int savedCursorX = 0;
     private int savedCursorY = 0;
     
-    private int currentFg = 7;  // White
-    private int currentBg = 0;  // Black
+    private int currentFg = JSSHConst.DEFAULT_FG_COLOR;  // White
+    private int currentBg = JSSHConst.DEFAULT_BG_COLOR;  // Black
     private boolean currentBold = false;
     private boolean currentReverse = false;  // Reverse video mode
     
@@ -70,25 +71,8 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     private boolean inEscape = false;
     private boolean inCSI = false;
     
-    // Colors (ANSI 16 colors)
-    private static final Color[] ANSI_COLORS = {
-        new Color(0, 0, 0),        // 0 Black
-        new Color(170, 0, 0),      // 1 Red
-        new Color(0, 170, 0),      // 2 Green
-        new Color(170, 85, 0),     // 3 Yellow/Brown
-        new Color(0, 0, 170),      // 4 Blue
-        new Color(170, 0, 170),    // 5 Magenta
-        new Color(0, 170, 170),    // 6 Cyan
-        new Color(170, 170, 170),  // 7 White
-        new Color(85, 85, 85),     // 8 Bright Black
-        new Color(255, 85, 85),    // 9 Bright Red
-        new Color(85, 255, 85),    // 10 Bright Green
-        new Color(255, 255, 85),   // 11 Bright Yellow
-        new Color(85, 85, 255),    // 12 Bright Blue
-        new Color(255, 85, 255),   // 13 Bright Magenta
-        new Color(85, 255, 255),   // 14 Bright Cyan
-        new Color(255, 255, 255),  // 15 Bright White
-    };
+    // Colors (ANSI 16 colors) - use shared constant array
+    private static final Color[] ANSI_COLORS = JSSHConst.ANSI_COLORS;
     
     private OutputStream outputStream;
     private TerminalListener listener;
@@ -100,7 +84,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     }
     
     public TerminalPanel() {
-        this(80, 24);
+        this(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
     }
     
     public TerminalPanel(int cols, int rows) {
@@ -124,11 +108,11 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         charHeight = fm.getHeight();
         
         // Ensure minimum size
-        if (charWidth < 1) charWidth = 8;
-        if (charHeight < 1) charHeight = 16;
-        
+        if (charWidth < 1) charWidth = JSSHConst.DEFAULT_CHAR_WIDTH;
+        if (charHeight < 1) charHeight = JSSHConst.DEFAULT_CHAR_HEIGHT;
+
         setPreferredSize(new Dimension(cols * charWidth, rows * charHeight));
-        setMinimumSize(new Dimension(40 * charWidth, 10 * charHeight));
+        setMinimumSize(new Dimension(JSSHConst.MIN_TERMINAL_COLS * charWidth, JSSHConst.MIN_TERMINAL_ROWS * charHeight));
         setFocusable(true);
         
         // Disable Tab focus traversal - we want Tab to go to the terminal
@@ -760,7 +744,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             scrollbackReverse.add(reverse[0].clone());
             
             // Trim scrollback if too large
-            while (scrollbackChars.size() > MAX_SCROLLBACK) {
+            while (scrollbackChars.size() > JSSHConst.MAX_SCROLLBACK_LINES) {
                 scrollbackChars.remove(0);
                 scrollbackColors.remove(0);
                 scrollbackBgColors.remove(0);

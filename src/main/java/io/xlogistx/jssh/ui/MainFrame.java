@@ -1,5 +1,6 @@
 package io.xlogistx.jssh.ui;
 
+import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.config.KnownHostsManager;
 import io.xlogistx.jssh.sftp.SFTPPanel;
 import io.xlogistx.jssh.ssh.SSHConnection;
@@ -18,16 +19,14 @@ import java.util.List;
  */
 public class MainFrame extends JFrame {
 
-    public static final String VERSION = "1.0.5";
-    
     private JTabbedPane tabbedPane;
     private final List<SessionTab> sessions = new ArrayList<>();
     private JLabel statusLabel;
     
     public MainFrame() {
-        super("JSSH - Java SSH Client");
+        super(JSSHConst.APP_NAME);
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        setSize(900, 600);
+        setSize(JSSHConst.MAIN_WINDOW_WIDTH, JSSHConst.MAIN_WINDOW_HEIGHT);
         setLocationRelativeTo(null);
         
         initUI();
@@ -204,7 +203,7 @@ public class MainFrame extends JFrame {
     private void parseAndConnect(String input) {
         String user = System.getProperty("user.name");
         String host;
-        int port = 22;
+        int port = JSSHConst.DEFAULT_SSH_PORT;
         
         if (input.contains("@")) {
             String[] parts = input.split("@");
@@ -271,7 +270,7 @@ public class MainFrame extends JFrame {
                             String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
                             int changeResult = JOptionPane.showConfirmDialog(MainFrame.this,
                                     "WARNING: HOST KEY HAS CHANGED!\n\n" +
-                                            "Host: " + h + (p != 22 ? ":" + p : "") + "\n" +
+                                            "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
                                             "Key type: " + keyType + "\n\n" +
                                             "Old fingerprint:\n" + oldFingerprint + "\n\n" +
                                             "New fingerprint:\n" + fingerprint + "\n\n" +
@@ -294,7 +293,7 @@ public class MainFrame extends JFrame {
                             // New host - show dialog with remember checkbox
                             JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
                             Object[] message = {
-                                    "Host key for " + h + (p != 22 ? ":" + p : "") + ":\n\n" +
+                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
                                             "Type: " + keyType + "\n" +
                                             "Fingerprint: " + fingerprint + "\n\n" +
                                             "Accept this key?",
@@ -329,10 +328,10 @@ public class MainFrame extends JFrame {
                     }
                     
                     // Create terminal
-                    TerminalPanel terminal = new TerminalPanel(80, 24);
-                    
+                    TerminalPanel terminal = new TerminalPanel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+
                     // Open shell
-                    ChannelShell shell = conn.openShell("xterm-256color", 80, 24);
+                    ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE, JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
                     
                     // Connect streams
                     terminal.setOutputStream(shell.getInvertedIn());
@@ -340,7 +339,7 @@ public class MainFrame extends JFrame {
                     // Read from shell in background
                     final TerminalPanel finalTerminal = terminal;
                     Thread reader = new Thread(() -> {
-                        byte[] buf = new byte[8192];
+                        byte[] buf = new byte[JSSHConst.SHELL_READ_BUFFER_SIZE];
                         try {
                             InputStream in = shell.getInvertedOut();
                             int n;
@@ -538,7 +537,7 @@ public class MainFrame extends JFrame {
             JFrame sftpFrame = new JFrame("SFTP - " + tab.getTitle());
             sftpFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
             sftpFrame.add(sftpPanel);
-            sftpFrame.setSize(800, 600);
+            sftpFrame.setSize(JSSHConst.SFTP_WINDOW_WIDTH, JSSHConst.SFTP_WINDOW_HEIGHT);
             sftpFrame.setLocationRelativeTo(this);
 
             // Close SFTP client when window is closed
@@ -580,8 +579,8 @@ public class MainFrame extends JFrame {
     
     private void showAbout() {
         JOptionPane.showMessageDialog(this,
-            "JSSH - Java SSH Client\n\n" +
-            "Version " + VERSION + "\n\n" +
+            JSSHConst.APP_NAME + "\n\n" +
+            "Version " + JSSHConst.VERSION.version() + "\n\n" +
             "A modern SSH client using Apache MINA SSHD\n\n" +
             "Features:\n" +
             "• Ed25519, ECDSA, RSA key support\n" +
@@ -670,7 +669,7 @@ public class MainFrame extends JFrame {
             this.session = session;
 
             setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-            setSize(900, 600);
+            setSize(JSSHConst.MAIN_WINDOW_WIDTH, JSSHConst.MAIN_WINDOW_HEIGHT);
             setLocationRelativeTo(null);
 
             initUI();

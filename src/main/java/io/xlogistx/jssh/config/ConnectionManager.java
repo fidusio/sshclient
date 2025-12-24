@@ -10,8 +10,6 @@ import java.util.*;
  */
 public class ConnectionManager {
 
-    private static final String CONFIG_DIR = ".jssh";
-    private static final String CONNECTIONS_DIR = "connections";
     private static ConnectionManager instance;
 
     private Path configPath;
@@ -19,7 +17,7 @@ public class ConnectionManager {
 
     private ConnectionManager() {
         String home = System.getProperty("user.home");
-        configPath = Paths.get(home, CONFIG_DIR, CONNECTIONS_DIR);
+        configPath = Paths.get(home, JSSHConst.CONFIG_DIR, JSSHConst.CONNECTIONS_DIR);
 
         try {
             Files.createDirectories(configPath);
