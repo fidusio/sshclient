@@ -72,6 +72,11 @@ public class MainFrame extends JFrame {
         detachBtn.addActionListener(e -> detachCurrentSession());
         toolbar.add(detachBtn);
 
+        JButton cloneBtn = new JButton("Clone");
+        cloneBtn.setToolTipText("Clone current session in a new window (Ctrl+Shift+C)");
+        cloneBtn.addActionListener(e -> cloneCurrentSession());
+        toolbar.add(cloneBtn);
+
         toolbar.addSeparator();
         
         JButton sftpBtn = new JButton("SFTP");
@@ -116,6 +121,11 @@ public class MainFrame extends JFrame {
         detachTabItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_D, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
         detachTabItem.addActionListener(e -> detachCurrentSession());
         fileMenu.add(detachTabItem);
+
+        JMenuItem cloneTabItem = new JMenuItem("Clone Session", KeyEvent.VK_L);
+        cloneTabItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        cloneTabItem.addActionListener(e -> cloneCurrentSession());
+        fileMenu.add(cloneTabItem);
 
         fileMenu.addSeparator();
 
@@ -367,7 +377,8 @@ public class MainFrame extends JFrame {
                     
                     SessionTab tab = new SessionTab(conn, terminal);
                     tab.setTitle(username + "@" + host);
-                    
+                    tab.setConnectionInfo(host, port, username, password, null, null);
+
                     return tab;
                     
                 } catch (Exception e) {
@@ -490,6 +501,193 @@ public class MainFrame extends JFrame {
             detachSession(tab);
         }
     }
+
+    /**
+     * Clone the current session - creates a new connection with same credentials in a separate frame
+     */
+    private void cloneCurrentSession() {
+        SessionTab tab = getCurrentSession();
+        if (tab == null) {
+            JOptionPane.showMessageDialog(this,
+                "No active session to clone",
+                "Error",
+                JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        cloneSession(tab);
+    }
+
+    /**
+     * Clone a session - creates a new SSH connection with same credentials
+     */
+    public void cloneSession(SessionTab sourceTab) {
+        if (sourceTab.getHost() == null) {
+            JOptionPane.showMessageDialog(this,
+                "Cannot clone this session - connection info not available",
+                "Error",
+                JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String host = sourceTab.getHost();
+        int port = sourceTab.getPort();
+        String username = sourceTab.getUsername();
+
+        statusLabel.setText(" Cloning session to " + host + "...");
+
+        SwingWorker<SessionTab, Void> worker = new SwingWorker<SessionTab, Void>() {
+            private String error = null;
+
+            @Override
+            protected SessionTab doInBackground() {
+                SSHConnection conn = new SSHConnection();
+
+                // Use same host key verifier
+                conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
+                    KnownHostsManager knownHosts = KnownHostsManager.getInstance();
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+
+                    switch (verifyResult) {
+                        case KNOWN_OK:
+                            return true;
+                        case KNOWN_CHANGED:
+                            String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
+                            int changeResult = JOptionPane.showConfirmDialog(MainFrame.this,
+                                "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                    "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
+                                    "Key type: " + keyType + "\n\n" +
+                                    "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                    "New fingerprint:\n" + fingerprint + "\n\n" +
+                                    "Accept the new key?",
+                                "Host Key Changed",
+                                JOptionPane.YES_NO_OPTION,
+                                JOptionPane.ERROR_MESSAGE);
+                            if (changeResult == JOptionPane.YES_OPTION) {
+                                knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                return true;
+                            }
+                            return false;
+                        case UNKNOWN:
+                        default:
+                            JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
+                            Object[] message = {
+                                "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
+                                    "Type: " + keyType + "\n" +
+                                    "Fingerprint: " + fingerprint + "\n\n" +
+                                    "Accept this key?",
+                                rememberCheckbox
+                            };
+                            int result = JOptionPane.showConfirmDialog(MainFrame.this,
+                                message,
+                                "Host Key Verification",
+                                JOptionPane.YES_NO_OPTION,
+                                JOptionPane.WARNING_MESSAGE);
+                            if (result == JOptionPane.YES_OPTION) {
+                                if (rememberCheckbox.isSelected()) {
+                                    knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                }
+                                return true;
+                            }
+                            return false;
+                    }
+                });
+
+                try {
+                    conn.connect(host, port, JSSHConst.CONNECTION_TIMEOUT_MS);
+
+                    // Authenticate using same method as source
+                    boolean authSuccess;
+                    if (sourceTab.isUsingKeyAuth()) {
+                        authSuccess = conn.authenticatePublicKey(username, sourceTab.getKeyFile(),
+                            sourceTab.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
+                    } else {
+                        authSuccess = conn.authenticatePassword(username, sourceTab.getPassword(),
+                            JSSHConst.AUTH_TIMEOUT_MS);
+                    }
+
+                    if (!authSuccess) {
+                        error = "Authentication failed";
+                        conn.close();
+                        return null;
+                    }
+
+                    // Create terminal
+                    TerminalPanel terminal = new TerminalPanel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+
+                    // Open shell
+                    ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE,
+                        JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+
+                    // Connect streams
+                    terminal.setOutputStream(shell.getInvertedIn());
+
+                    // Read from shell in background
+                    Thread reader = new Thread(() -> {
+                        byte[] buf = new byte[JSSHConst.SHELL_READ_BUFFER_SIZE];
+                        try {
+                            InputStream in = shell.getInvertedOut();
+                            int n;
+                            while ((n = in.read(buf)) >= 0) {
+                                final byte[] data = buf.clone();
+                                final int len = n;
+                                SwingUtilities.invokeLater(() -> terminal.write(data, 0, len));
+                            }
+                            SwingUtilities.invokeLater(() -> {
+                                terminal.displayMessage("*** Connection closed by remote host ***", 9);
+                            });
+                        } catch (IOException e) {
+                            final String errorMsg = e.getMessage();
+                            SwingUtilities.invokeLater(() -> {
+                                terminal.displayMessage("*** Connection lost: " + (errorMsg != null ? errorMsg : "Unknown error") + " ***", 9);
+                            });
+                        }
+                    });
+                    reader.setDaemon(true);
+                    reader.start();
+
+                    SessionTab tab = new SessionTab(conn, terminal);
+                    tab.setTitle(username + "@" + host + " (clone)");
+                    // Copy connection info for potential re-cloning
+                    tab.setConnectionInfo(host, port, username, sourceTab.getPassword(),
+                        sourceTab.getKeyFile(), sourceTab.getPassphrase());
+
+                    return tab;
+
+                } catch (Exception e) {
+                    error = e.getMessage();
+                    conn.close();
+                    return null;
+                }
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    SessionTab tab = get();
+                    if (tab != null) {
+                        // Open in detached frame
+                        DetachedSessionFrame detachedFrame = new DetachedSessionFrame(tab);
+                        detachedFrame.setVisible(true);
+                        statusLabel.setText(" Cloned session: " + tab.getTitle());
+                    } else {
+                        statusLabel.setText(" Clone failed");
+                        JOptionPane.showMessageDialog(MainFrame.this,
+                            "Clone failed: " + error,
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
+                    }
+                } catch (Exception e) {
+                    statusLabel.setText(" Clone failed");
+                    JOptionPane.showMessageDialog(MainFrame.this,
+                        "Clone failed: " + e.getMessage(),
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        };
+
+        worker.execute();
+    }
     
     private void closeCurrentTab() {
         int index = tabbedPane.getSelectedIndex();
@@ -609,6 +807,14 @@ public class MainFrame extends JFrame {
         private final TerminalPanel terminal;
         private final JPanel panel;
         private String title;
+
+        // Authentication info for cloning
+        private String host;
+        private int port;
+        private String username;
+        private String password;  // null if using key auth
+        private String keyFile;   // null if using password auth
+        private String passphrase;
         
         public SessionTab(SSHConnection connection, TerminalPanel terminal) {
             this.connection = connection;
@@ -647,7 +853,35 @@ public class MainFrame extends JFrame {
         public JPanel getPanel() { return panel; }
         public String getTitle() { return title; }
         public void setTitle(String title) { this.title = title; }
-        
+
+        // Authentication info getters/setters for cloning
+        public String getHost() { return host; }
+        public void setHost(String host) { this.host = host; }
+        public int getPort() { return port; }
+        public void setPort(int port) { this.port = port; }
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+        public String getKeyFile() { return keyFile; }
+        public void setKeyFile(String keyFile) { this.keyFile = keyFile; }
+        public String getPassphrase() { return passphrase; }
+        public void setPassphrase(String passphrase) { this.passphrase = passphrase; }
+
+        public boolean isUsingKeyAuth() { return keyFile != null && !keyFile.isEmpty(); }
+
+        /**
+         * Store connection info for cloning
+         */
+        public void setConnectionInfo(String host, int port, String username, String password, String keyFile, String passphrase) {
+            this.host = host;
+            this.port = port;
+            this.username = username;
+            this.password = password;
+            this.keyFile = keyFile;
+            this.passphrase = passphrase;
+        }
+
         public void close() {
             connection.close();
         }
@@ -785,6 +1019,11 @@ public class MainFrame extends JFrame {
             });
             fileMenu.add(disconnectItem);
 
+            JMenuItem cloneItem = new JMenuItem("Clone Session", KeyEvent.VK_L);
+            cloneItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+            cloneItem.addActionListener(e -> cloneSession());
+            fileMenu.add(cloneItem);
+
             fileMenu.addSeparator();
 
             JMenuItem closeItem = new JMenuItem("Close Window", KeyEvent.VK_C);
@@ -837,6 +1076,169 @@ public class MainFrame extends JFrame {
 
             TunnelDialog dialog = new TunnelDialog(this, session.getConnection());
             dialog.setVisible(true);
+        }
+
+        /**
+         * Clone this session - creates a new SSH connection with same credentials
+         */
+        private void cloneSession() {
+            if (session.getHost() == null) {
+                JOptionPane.showMessageDialog(this,
+                    "Cannot clone this session - connection info not available",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            String host = session.getHost();
+            int port = session.getPort();
+            String username = session.getUsername();
+            final DetachedSessionFrame parentFrame = this;
+
+            statusLabel.setText(" Cloning session...");
+
+            SwingWorker<SessionTab, Void> worker = new SwingWorker<SessionTab, Void>() {
+                private String error = null;
+
+                @Override
+                protected SessionTab doInBackground() {
+                    SSHConnection conn = new SSHConnection();
+
+                    conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
+                        KnownHostsManager knownHosts = KnownHostsManager.getInstance();
+                        KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+
+                        switch (verifyResult) {
+                            case KNOWN_OK:
+                                return true;
+                            case KNOWN_CHANGED:
+                                String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
+                                int changeResult = JOptionPane.showConfirmDialog(parentFrame,
+                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                        "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
+                                        "Key type: " + keyType + "\n\n" +
+                                        "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                        "New fingerprint:\n" + fingerprint + "\n\n" +
+                                        "Accept the new key?",
+                                    "Host Key Changed",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.ERROR_MESSAGE);
+                                if (changeResult == JOptionPane.YES_OPTION) {
+                                    knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                    return true;
+                                }
+                                return false;
+                            case UNKNOWN:
+                            default:
+                                JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
+                                Object[] message = {
+                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
+                                        "Type: " + keyType + "\n" +
+                                        "Fingerprint: " + fingerprint + "\n\n" +
+                                        "Accept this key?",
+                                    rememberCheckbox
+                                };
+                                int result = JOptionPane.showConfirmDialog(parentFrame,
+                                    message,
+                                    "Host Key Verification",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE);
+                                if (result == JOptionPane.YES_OPTION) {
+                                    if (rememberCheckbox.isSelected()) {
+                                        knownHosts.addHost(h, p, keyType, fingerprint, key);
+                                    }
+                                    return true;
+                                }
+                                return false;
+                        }
+                    });
+
+                    try {
+                        conn.connect(host, port, JSSHConst.CONNECTION_TIMEOUT_MS);
+
+                        boolean authSuccess;
+                        if (session.isUsingKeyAuth()) {
+                            authSuccess = conn.authenticatePublicKey(username, session.getKeyFile(),
+                                session.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
+                        } else {
+                            authSuccess = conn.authenticatePassword(username, session.getPassword(),
+                                JSSHConst.AUTH_TIMEOUT_MS);
+                        }
+
+                        if (!authSuccess) {
+                            error = "Authentication failed";
+                            conn.close();
+                            return null;
+                        }
+
+                        TerminalPanel terminal = new TerminalPanel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+                        ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE,
+                            JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+                        terminal.setOutputStream(shell.getInvertedIn());
+
+                        Thread reader = new Thread(() -> {
+                            byte[] buf = new byte[JSSHConst.SHELL_READ_BUFFER_SIZE];
+                            try {
+                                InputStream in = shell.getInvertedOut();
+                                int n;
+                                while ((n = in.read(buf)) >= 0) {
+                                    final byte[] data = buf.clone();
+                                    final int len = n;
+                                    SwingUtilities.invokeLater(() -> terminal.write(data, 0, len));
+                                }
+                                SwingUtilities.invokeLater(() -> {
+                                    terminal.displayMessage("*** Connection closed by remote host ***", 9);
+                                });
+                            } catch (IOException e) {
+                                final String errorMsg = e.getMessage();
+                                SwingUtilities.invokeLater(() -> {
+                                    terminal.displayMessage("*** Connection lost: " + (errorMsg != null ? errorMsg : "Unknown error") + " ***", 9);
+                                });
+                            }
+                        });
+                        reader.setDaemon(true);
+                        reader.start();
+
+                        SessionTab tab = new SessionTab(conn, terminal);
+                        tab.setTitle(username + "@" + host + " (clone)");
+                        tab.setConnectionInfo(host, port, username, session.getPassword(),
+                            session.getKeyFile(), session.getPassphrase());
+
+                        return tab;
+
+                    } catch (Exception e) {
+                        error = e.getMessage();
+                        conn.close();
+                        return null;
+                    }
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        SessionTab tab = get();
+                        if (tab != null) {
+                            DetachedSessionFrame detachedFrame = new DetachedSessionFrame(tab);
+                            detachedFrame.setVisible(true);
+                            statusLabel.setText(" " + session.getTitle());
+                        } else {
+                            statusLabel.setText(" Clone failed");
+                            JOptionPane.showMessageDialog(parentFrame,
+                                "Clone failed: " + error,
+                                "Error",
+                                JOptionPane.ERROR_MESSAGE);
+                        }
+                    } catch (Exception e) {
+                        statusLabel.setText(" Clone failed");
+                        JOptionPane.showMessageDialog(parentFrame,
+                            "Clone failed: " + e.getMessage(),
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            };
+
+            worker.execute();
         }
 
         private void closeWindow() {

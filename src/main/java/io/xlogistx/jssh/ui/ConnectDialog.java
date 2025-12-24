@@ -710,6 +710,8 @@ public class ConnectDialog extends JDialog {
                 SwingUtilities.invokeLater(() -> {
                     sessionTab = new MainFrame.SessionTab(successConn, terminal);
                     sessionTab.setTitle(username + "@" + host);
+                    // Store connection info for cloning
+                    sessionTab.setConnectionInfo(host, port, username, password, keyFile, passphrase);
                     connected = true;
                     setCursor(Cursor.getDefaultCursor());
                     dispose();
