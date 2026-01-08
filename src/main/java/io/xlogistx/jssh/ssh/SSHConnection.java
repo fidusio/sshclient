@@ -280,6 +280,10 @@ public class SSHConnection {
         shellChannel.setPtyWidth(cols * JSSHConst.DEFAULT_CHAR_WIDTH);
         shellChannel.setPtyHeight(rows * JSSHConst.DEFAULT_CHAR_HEIGHT);
 
+        // Set UTF-8 locale environment variables for proper Unicode/box-drawing character support
+//        shellChannel.setEnv("LANG", "en_US.UTF-8");
+//        shellChannel.setEnv("LC_ALL", "en_US.UTF-8");
+
         // Configure X11 forwarding if requested
         if (x11Forwarding) {
             configureX11Forwarding(shellChannel, x11Host, x11Display);
