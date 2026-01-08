@@ -38,7 +38,7 @@ A modern GUI SSH client written in Java using Apache MINA SSHD.
 
 ## Requirements
 
-- Java 11 or higher
+- Java 8+
 - Maven 3.6+ (for building)
 
 ## Building
@@ -47,7 +47,7 @@ A modern GUI SSH client written in Java using Apache MINA SSHD.
 mvn clean package
 ```
 
-This creates `target/jssh-1.0.2.jar` with all dependencies included.
+This creates `target/jssh.jar` with all dependencies included.
 
 ## Running
 
