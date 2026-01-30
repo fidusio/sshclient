@@ -28,8 +28,11 @@ import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -48,6 +51,9 @@ public class SSHConnection {
     private boolean connected = false;
 
     private HostKeyVerifier hostKeyVerifier;
+
+    // Track active tunnels for UI display
+    private final List<TunnelInfo> tunnels = new ArrayList<>();
 
     public interface HostKeyVerifier {
         boolean verify(String host, int port, String keyType, String fingerprint, PublicKey key);
@@ -539,5 +545,55 @@ public class SSHConnection {
         } catch (Exception e) {
             return "unknown";
         }
+    }
+
+    // Tunnel management methods
+    public void addTunnel(TunnelInfo tunnel) {
+        tunnels.add(tunnel);
+    }
+
+    public void removeTunnel(int index) throws IOException {
+        if (index >= 0 && index < tunnels.size()) {
+            TunnelInfo tunnel = tunnels.get(index);
+
+            // Actually stop the port forwarding in the SSH session
+            if ("Local".equals(tunnel.getType())) {
+                session.stopLocalPortForwarding(
+                    new SshdSocketAddress("127.0.0.1", tunnel.getLocalPort())
+                );
+            } else {
+                session.stopRemotePortForwarding(
+                    new SshdSocketAddress("0.0.0.0", tunnel.getRemotePort())
+                );
+            }
+
+            tunnels.remove(index);
+        }
+    }
+
+    public List<TunnelInfo> getTunnels() {
+        return Collections.unmodifiableList(tunnels);
+    }
+
+    /**
+     * Stores information about an active port forwarding tunnel
+     */
+    public static class TunnelInfo {
+        private final String type;
+        private final int localPort;
+        private final String remoteHost;
+        private final int remotePort;
+
+        public TunnelInfo(String type, int localPort, String remoteHost, int remotePort) {
+            this.type = type;
+            this.localPort = localPort;
+            this.remoteHost = remoteHost;
+            this.remotePort = remotePort;
+        }
+
+        public String getType() { return type; }
+        public int getLocalPort() { return localPort; }
+        public String getRemoteHost() { return remoteHost; }
+        public int getRemotePort() { return remotePort; }
     }
 }

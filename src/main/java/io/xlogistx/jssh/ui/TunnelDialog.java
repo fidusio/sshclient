@@ -2,13 +2,12 @@ package io.xlogistx.jssh.ui;
 
 import io.xlogistx.jssh.config.JSSHConst;
 import io.xlogistx.jssh.ssh.SSHConnection;
+import io.xlogistx.jssh.ssh.SSHConnection.TunnelInfo;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Dialog for managing port forwarding tunnels
@@ -18,15 +17,27 @@ public class TunnelDialog extends JDialog {
     private SSHConnection connection;
     private JTable tunnelTable;
     private DefaultTableModel tableModel;
-    private List<TunnelInfo> tunnels = new ArrayList<>();
-    
+
     public TunnelDialog(Frame owner, SSHConnection connection) {
         super(owner, "Port Tunnels", true);
         this.connection = connection;
 
         initUI();
+        loadExistingTunnels();
         setSize(JSSHConst.TUNNEL_DIALOG_WIDTH, JSSHConst.TUNNEL_DIALOG_HEIGHT);
         setLocationRelativeTo(owner);
+    }
+
+    private void loadExistingTunnels() {
+        for (TunnelInfo info : connection.getTunnels()) {
+            if ("Local".equals(info.getType())) {
+                tableModel.addRow(new Object[] { "Local →", info.getLocalPort(),
+                    info.getRemoteHost(), info.getRemotePort(), "Active" });
+            } else {
+                tableModel.addRow(new Object[] { "← Remote", info.getRemotePort(),
+                    info.getRemoteHost(), info.getLocalPort(), "Active" });
+            }
+        }
     }
     
     private void initUI() {
@@ -122,7 +133,7 @@ public class TunnelDialog extends JDialog {
                 connection.createLocalPortForward(lp, rh, rp);
 
                 TunnelInfo info = new TunnelInfo("Local", lp, rh, rp);
-                tunnels.add(info);
+                connection.addTunnel(info);
                 tableModel.addRow(new Object[] { "Local →", lp, rh, rp, "Active" });
 
                 JOptionPane.showMessageDialog(this,
@@ -196,7 +207,7 @@ public class TunnelDialog extends JDialog {
                 connection.createRemotePortForward(rp, lh, lp);
 
                 TunnelInfo info = new TunnelInfo("Remote", lp, lh, rp);
-                tunnels.add(info);
+                connection.addTunnel(info);
                 tableModel.addRow(new Object[] { "← Remote", rp, lh, lp, "Active" });
 
                 JOptionPane.showMessageDialog(this,
@@ -224,24 +235,15 @@ public class TunnelDialog extends JDialog {
     private void removeTunnel() {
         int row = tunnelTable.getSelectedRow();
         if (row >= 0) {
-            // Note: SSHD doesn't easily support removing individual tunnels
-            // In a production app, you'd need to track and manage this
-            tunnels.remove(row);
-            tableModel.removeRow(row);
-        }
-    }
-    
-    private static class TunnelInfo {
-        String type;
-        int localPort;
-        String remoteHost;
-        int remotePort;
-        
-        TunnelInfo(String type, int localPort, String remoteHost, int remotePort) {
-            this.type = type;
-            this.localPort = localPort;
-            this.remoteHost = remoteHost;
-            this.remotePort = remotePort;
+            try {
+                connection.removeTunnel(row);
+                tableModel.removeRow(row);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this,
+                    "Failed to remove tunnel: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 }
