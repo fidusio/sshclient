@@ -779,6 +779,7 @@ public class MainFrame extends JFrame {
         JOptionPane.showMessageDialog(this,
             JSSHConst.APP_NAME + "\n\n" +
             "Version " + JSSHConst.VERSION.version() + "\n\n" +
+            "JVM: " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")\n\n" +
             "A modern SSH client using Apache MINA SSHD\n\n" +
             "Features:\n" +
             "• Ed25519, ECDSA, RSA key support\n" +
