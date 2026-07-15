@@ -22,16 +22,16 @@ public class MainFrame extends JFrame {
     private JTabbedPane tabbedPane;
     private final List<SessionTab> sessions = new ArrayList<>();
     private JLabel statusLabel;
-    
+
     public MainFrame() {
         super(JSSHConst.APP_NAME);
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setSize(JSSHConst.MAIN_WINDOW_WIDTH, JSSHConst.MAIN_WINDOW_HEIGHT);
         setLocationRelativeTo(null);
-        
+
         initUI();
         initMenuBar();
-        
+
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -39,30 +39,30 @@ public class MainFrame extends JFrame {
             }
         });
     }
-    
+
     private void initUI() {
         setLayout(new BorderLayout());
-        
+
         // Tabbed pane for sessions
         tabbedPane = new JTabbedPane();
         tabbedPane.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         add(tabbedPane, BorderLayout.CENTER);
-        
+
         // Status bar
         JPanel statusBar = new JPanel(new BorderLayout());
         statusBar.setBorder(BorderFactory.createLoweredBevelBorder());
         statusLabel = new JLabel(" Ready");
         statusBar.add(statusLabel, BorderLayout.WEST);
         add(statusBar, BorderLayout.SOUTH);
-        
+
         // Toolbar
         JToolBar toolbar = new JToolBar();
         toolbar.setFloatable(false);
-        
+
         JButton connectBtn = new JButton("Connect");
         connectBtn.addActionListener(e -> showConnectDialog());
         toolbar.add(connectBtn);
-        
+
         JButton disconnectBtn = new JButton("Disconnect");
         disconnectBtn.addActionListener(e -> disconnectCurrentSession());
         toolbar.add(disconnectBtn);
@@ -78,40 +78,40 @@ public class MainFrame extends JFrame {
         toolbar.add(cloneBtn);
 
         toolbar.addSeparator();
-        
+
         JButton sftpBtn = new JButton("SFTP");
         sftpBtn.addActionListener(e -> openSFTPForCurrentSession());
         toolbar.add(sftpBtn);
-        
+
         JButton tunnelBtn = new JButton("Tunnels");
         tunnelBtn.addActionListener(e -> showTunnelDialog());
         toolbar.add(tunnelBtn);
-        
+
         add(toolbar, BorderLayout.NORTH);
     }
-    
+
     private void initMenuBar() {
         JMenuBar menuBar = new JMenuBar();
-        
+
         // File menu
         JMenu fileMenu = new JMenu("File");
         fileMenu.setMnemonic(KeyEvent.VK_F);
-        
+
         JMenuItem connectItem = new JMenuItem("Connect...", KeyEvent.VK_C);
         connectItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_DOWN_MASK));
         connectItem.addActionListener(e -> showConnectDialog());
         fileMenu.add(connectItem);
-        
+
         JMenuItem quickConnectItem = new JMenuItem("Quick Connect...", KeyEvent.VK_Q);
         quickConnectItem.addActionListener(e -> showQuickConnectDialog());
         fileMenu.add(quickConnectItem);
-        
+
         fileMenu.addSeparator();
-        
+
         JMenuItem disconnectItem = new JMenuItem("Disconnect", KeyEvent.VK_D);
         disconnectItem.addActionListener(e -> disconnectCurrentSession());
         fileMenu.add(disconnectItem);
-        
+
         JMenuItem closeTabItem = new JMenuItem("Close Tab", KeyEvent.VK_W);
         closeTabItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_W, InputEvent.CTRL_DOWN_MASK));
         closeTabItem.addActionListener(e -> closeCurrentTab());
@@ -133,83 +133,83 @@ public class MainFrame extends JFrame {
         exitItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Q, InputEvent.CTRL_DOWN_MASK));
         exitItem.addActionListener(e -> exitApplication());
         fileMenu.add(exitItem);
-        
+
         menuBar.add(fileMenu);
-        
+
         // Edit menu
         JMenu editMenu = new JMenu("Edit");
         editMenu.setMnemonic(KeyEvent.VK_E);
-        
+
         JMenuItem copyItem = new JMenuItem("Copy", KeyEvent.VK_C);
         copyItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK));
         editMenu.add(copyItem);
-        
+
         JMenuItem pasteItem = new JMenuItem("Paste", KeyEvent.VK_P);
         pasteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK));
         editMenu.add(pasteItem);
-        
+
         editMenu.addSeparator();
-        
+
         JMenuItem clearItem = new JMenuItem("Clear Screen");
         clearItem.addActionListener(e -> clearCurrentTerminal());
         editMenu.add(clearItem);
-        
+
         menuBar.add(editMenu);
-        
+
         // Tools menu
         JMenu toolsMenu = new JMenu("Tools");
         toolsMenu.setMnemonic(KeyEvent.VK_T);
-        
+
         JMenuItem sftpItem = new JMenuItem("SFTP Browser", KeyEvent.VK_S);
         sftpItem.addActionListener(e -> openSFTPForCurrentSession());
         toolsMenu.add(sftpItem);
-        
+
         JMenuItem tunnelItem = new JMenuItem("Port Tunnels...", KeyEvent.VK_T);
         tunnelItem.addActionListener(e -> showTunnelDialog());
         toolsMenu.add(tunnelItem);
-        
+
         toolsMenu.addSeparator();
-        
+
         JMenuItem keysItem = new JMenuItem("Key Manager...", KeyEvent.VK_K);
         keysItem.addActionListener(e -> showKeyManager());
         toolsMenu.add(keysItem);
-        
+
         menuBar.add(toolsMenu);
-        
+
         // Help menu
         JMenu helpMenu = new JMenu("Help");
         helpMenu.setMnemonic(KeyEvent.VK_H);
-        
+
         JMenuItem aboutItem = new JMenuItem("About", KeyEvent.VK_A);
         aboutItem.addActionListener(e -> showAbout());
         helpMenu.add(aboutItem);
-        
+
         menuBar.add(helpMenu);
-        
+
         setJMenuBar(menuBar);
     }
-    
+
     public void showConnectDialog() {
         ConnectDialog dialog = new ConnectDialog(this);
         dialog.setVisible(true);
-        
+
         if (dialog.isConnected()) {
             SessionTab tab = dialog.getSessionTab();
             addSession(tab);
         }
     }
-    
+
     private void showQuickConnectDialog() {
-        String input = JOptionPane.showInputDialog(this, 
-            "Enter connection (user@host:port):", 
-            "Quick Connect", 
-            JOptionPane.PLAIN_MESSAGE);
-        
+        String input = JOptionPane.showInputDialog(this,
+                "Enter connection (user@host:port):",
+                "Quick Connect",
+                JOptionPane.PLAIN_MESSAGE);
+
         if (input != null && !input.trim().isEmpty()) {
             parseAndConnect(input.trim());
         }
     }
-    
+
     private void parseAndConnect(String input) {
         String user = System.getProperty("user.name");
         String host;
@@ -257,22 +257,22 @@ public class MainFrame extends JFrame {
             }
         } catch (IllegalArgumentException e) {
             JOptionPane.showMessageDialog(this,
-                "Invalid connection string.\n" +
-                "Expected: user@host, user@host:port or user@[ipv6]:port\n" +
-                "(" + e.getMessage() + ")",
-                "Quick Connect",
-                JOptionPane.ERROR_MESSAGE);
+                    "Invalid connection string.\n" +
+                            "Expected: user@host, user@host:port or user@[ipv6]:port\n" +
+                            "(" + e.getMessage() + ")",
+                    "Quick Connect",
+                    JOptionPane.ERROR_MESSAGE);
             return;
         }
 
         quickConnect(host, port, user);
     }
-    
+
     public void quickConnect(String host, int port, String user) {
         if (user == null) {
             user = System.getProperty("user.name");
         }
-        
+
         char[] password = showPasswordDialog("Password for " + user + "@" + host);
         if (password == null) return;
 
@@ -282,9 +282,9 @@ public class MainFrame extends JFrame {
     private char[] showPasswordDialog(String prompt) {
         JPasswordField passwordField = new JPasswordField();
         int result = JOptionPane.showConfirmDialog(this,
-            new Object[] { prompt, passwordField },
-            "Authentication",
-            JOptionPane.OK_CANCEL_OPTION);
+                new Object[]{prompt, passwordField},
+                "Authentication",
+                JOptionPane.OK_CANCEL_OPTION);
 
         if (result == JOptionPane.OK_OPTION) {
             return passwordField.getPassword();
@@ -296,11 +296,11 @@ public class MainFrame extends JFrame {
         // Create connection in background thread
         SwingWorker<SessionTab, Void> worker = new SwingWorker<SessionTab, Void>() {
             private String error = null;
-            
+
             @Override
             protected SessionTab doInBackground() {
                 SSHConnection conn = new SSHConnection();
-                
+
                 // Host key verification with known hosts support
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
                     KnownHostsManager knownHosts = KnownHostsManager.getInstance();
@@ -361,7 +361,7 @@ public class MainFrame extends JFrame {
                             return false;
                     }
                 });
-                
+
                 try {
                     setStatus(" Connecting to " + host + "...");
                     conn.connect(host, port, JSSHConst.CONNECTION_TIMEOUT_MS);
@@ -372,16 +372,16 @@ public class MainFrame extends JFrame {
                         conn.close();
                         return null;
                     }
-                    
+
                     // Create terminal
                     TerminalPanel terminal = new TerminalPanel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
 
                     // Open shell
                     ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE, JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
-                    
+
                     // Connect streams
                     terminal.setOutputStream(shell.getInvertedIn());
-                    
+
                     // Read from shell in background
                     final TerminalPanel finalTerminal = terminal;
                     Thread reader = new Thread(() -> {
@@ -410,20 +410,20 @@ public class MainFrame extends JFrame {
                     });
                     reader.setDaemon(true);
                     reader.start();
-                    
+
                     SessionTab tab = new SessionTab(conn, terminal);
                     tab.setTitle(username + "@" + host);
                     tab.setConnectionInfo(host, port, username, password, null, null);
 
                     return tab;
-                    
+
                 } catch (Exception e) {
                     error = e.getMessage();
                     conn.close();
                     return null;
                 }
             }
-            
+
             @Override
             protected void done() {
                 try {
@@ -434,16 +434,16 @@ public class MainFrame extends JFrame {
                     } else {
                         statusLabel.setText(" Connection failed");
                         JOptionPane.showMessageDialog(MainFrame.this,
-                            "Connection failed: " + error,
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE);
+                                "Connection failed: " + error,
+                                "Error",
+                                JOptionPane.ERROR_MESSAGE);
                     }
                 } catch (Exception e) {
                     statusLabel.setText(" Connection failed");
                     JOptionPane.showMessageDialog(MainFrame.this,
-                        "Connection failed: " + e.getMessage(),
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE);
+                            "Connection failed: " + e.getMessage(),
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
                 } finally {
                     // The session tab keeps its own copy - wipe ours
                     java.util.Arrays.fill(password, '\0');
@@ -453,7 +453,7 @@ public class MainFrame extends JFrame {
 
         worker.execute();
     }
-    
+
     private void addSession(SessionTab tab) {
         sessions.add(tab);
 
@@ -481,27 +481,28 @@ public class MainFrame extends JFrame {
         tabbedPane.addTab(null, tab.getPanel());
         tabbedPane.setTabComponentAt(tabbedPane.getTabCount() - 1, tabPanel);
         tabbedPane.setSelectedIndex(tabbedPane.getTabCount() - 1);
-        
+
         // Set up terminal listener
         tab.getTerminal().setTerminalListener(new TerminalPanel.TerminalListener() {
             @Override
             public void onTitleChange(String title) {
                 titleLabel.setText(title + " ");
             }
-            
+
             @Override
             public void onBell() {
                 Toolkit.getDefaultToolkit().beep();
             }
-            
+
             @Override
             public void onResize(int cols, int rows) {
                 try {
                     tab.getConnection().resizeTerminal(cols, rows);
-                } catch (IOException e) { }
+                } catch (IOException e) {
+                }
             }
         });
-        
+
         // Focus terminal after a short delay to ensure it's visible
         SwingUtilities.invokeLater(() -> {
             tab.getPanel().revalidate();
@@ -509,7 +510,7 @@ public class MainFrame extends JFrame {
             tab.getTerminal().requestFocusInWindow();
         });
     }
-    
+
     private void closeTab(SessionTab tab) {
         int index = sessions.indexOf(tab);
         if (index >= 0) {
@@ -548,9 +549,9 @@ public class MainFrame extends JFrame {
         SessionTab tab = getCurrentSession();
         if (tab == null) {
             JOptionPane.showMessageDialog(this,
-                "No active session to clone",
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
+                    "No active session to clone",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
             return;
         }
         cloneSession(tab);
@@ -562,9 +563,9 @@ public class MainFrame extends JFrame {
     public void cloneSession(SessionTab sourceTab) {
         if (sourceTab.getHost() == null) {
             JOptionPane.showMessageDialog(this,
-                "Cannot clone this session - connection info not available",
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
+                    "Cannot clone this session - connection info not available",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
             return;
         }
 
@@ -592,15 +593,15 @@ public class MainFrame extends JFrame {
                         case KNOWN_CHANGED:
                             String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
                             int changeResult = JOptionPane.showConfirmDialog(MainFrame.this,
-                                "WARNING: HOST KEY HAS CHANGED!\n\n" +
-                                    "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
-                                    "Key type: " + keyType + "\n\n" +
-                                    "Old fingerprint:\n" + oldFingerprint + "\n\n" +
-                                    "New fingerprint:\n" + fingerprint + "\n\n" +
-                                    "Accept the new key?",
-                                "Host Key Changed",
-                                JOptionPane.YES_NO_OPTION,
-                                JOptionPane.ERROR_MESSAGE);
+                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                            "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
+                                            "Key type: " + keyType + "\n\n" +
+                                            "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                            "New fingerprint:\n" + fingerprint + "\n\n" +
+                                            "Accept the new key?",
+                                    "Host Key Changed",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.ERROR_MESSAGE);
                             if (changeResult == JOptionPane.YES_OPTION) {
                                 knownHosts.addHost(h, p, keyType, fingerprint, key);
                                 return true;
@@ -610,17 +611,17 @@ public class MainFrame extends JFrame {
                         default:
                             JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
                             Object[] message = {
-                                "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
-                                    "Type: " + keyType + "\n" +
-                                    "Fingerprint: " + fingerprint + "\n\n" +
-                                    "Accept this key?",
-                                rememberCheckbox
+                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
+                                            "Type: " + keyType + "\n" +
+                                            "Fingerprint: " + fingerprint + "\n\n" +
+                                            "Accept this key?",
+                                    rememberCheckbox
                             };
                             int result = JOptionPane.showConfirmDialog(MainFrame.this,
-                                message,
-                                "Host Key Verification",
-                                JOptionPane.YES_NO_OPTION,
-                                JOptionPane.WARNING_MESSAGE);
+                                    message,
+                                    "Host Key Verification",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE);
                             if (result == JOptionPane.YES_OPTION) {
                                 if (rememberCheckbox.isSelected()) {
                                     knownHosts.addHost(h, p, keyType, fingerprint, key);
@@ -638,10 +639,10 @@ public class MainFrame extends JFrame {
                     boolean authSuccess;
                     if (sourceTab.isUsingKeyAuth()) {
                         authSuccess = conn.authenticatePublicKey(username, sourceTab.getKeyFile(),
-                            sourceTab.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
+                                sourceTab.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
                     } else {
                         authSuccess = conn.authenticatePassword(username, sourceTab.getPassword(),
-                            JSSHConst.AUTH_TIMEOUT_MS);
+                                JSSHConst.AUTH_TIMEOUT_MS);
                     }
 
                     if (!authSuccess) {
@@ -655,7 +656,7 @@ public class MainFrame extends JFrame {
 
                     // Open shell
                     ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE,
-                        JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+                            JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
 
                     // Connect streams
                     terminal.setOutputStream(shell.getInvertedIn());
@@ -688,7 +689,7 @@ public class MainFrame extends JFrame {
                     tab.setTitle(username + "@" + host + " (clone)");
                     // Copy connection info for potential re-cloning
                     tab.setConnectionInfo(host, port, username, sourceTab.getPassword(),
-                        sourceTab.getKeyFile(), sourceTab.getPassphrase());
+                            sourceTab.getKeyFile(), sourceTab.getPassphrase());
 
                     return tab;
 
@@ -711,30 +712,30 @@ public class MainFrame extends JFrame {
                     } else {
                         statusLabel.setText(" Clone failed");
                         JOptionPane.showMessageDialog(MainFrame.this,
-                            "Clone failed: " + error,
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE);
+                                "Clone failed: " + error,
+                                "Error",
+                                JOptionPane.ERROR_MESSAGE);
                     }
                 } catch (Exception e) {
                     statusLabel.setText(" Clone failed");
                     JOptionPane.showMessageDialog(MainFrame.this,
-                        "Clone failed: " + e.getMessage(),
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE);
+                            "Clone failed: " + e.getMessage(),
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
                 }
             }
         };
 
         worker.execute();
     }
-    
+
     private void closeCurrentTab() {
         int index = tabbedPane.getSelectedIndex();
         if (index >= 0 && index < sessions.size()) {
             closeTab(sessions.get(index));
         }
     }
-    
+
     private void disconnectCurrentSession() {
         SessionTab tab = getCurrentSession();
         if (tab != null) {
@@ -742,14 +743,14 @@ public class MainFrame extends JFrame {
             statusLabel.setText(" Disconnected");
         }
     }
-    
+
     private void clearCurrentTerminal() {
         SessionTab tab = getCurrentSession();
         if (tab != null) {
             tab.getTerminal().clear();
         }
     }
-    
+
     /**
      * Set the status bar text, marshaling to the EDT if called from another thread.
      */
@@ -768,17 +769,17 @@ public class MainFrame extends JFrame {
         }
         return null;
     }
-    
+
     private void openSFTPForCurrentSession() {
         SessionTab tab = getCurrentSession();
         if (tab == null || !tab.getConnection().isConnected()) {
-            JOptionPane.showMessageDialog(this, 
-                "No active connection", 
-                "Error", 
-                JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this,
+                    "No active connection",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
             return;
         }
-        
+
         try {
             SFTPPanel sftpPanel = new SFTPPanel(tab.getConnection());
 
@@ -800,47 +801,48 @@ public class MainFrame extends JFrame {
 
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this,
-                "Failed to open SFTP: " + e.getMessage(),
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
+                    "Failed to open SFTP: " + e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
         }
     }
-    
+
     private void showTunnelDialog() {
         SessionTab tab = getCurrentSession();
         if (tab == null || !tab.getConnection().isConnected()) {
             JOptionPane.showMessageDialog(this,
-                "No active connection",
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
+                    "No active connection",
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
             return;
         }
-        
+
         TunnelDialog dialog = new TunnelDialog(this, tab.getConnection());
         dialog.setVisible(true);
     }
-    
+
     private void showKeyManager() {
         KeyManagerDialog dialog = new KeyManagerDialog(this);
         dialog.setVisible(true);
     }
-    
+
     private void showAbout() {
         JOptionPane.showMessageDialog(this,
-            JSSHConst.APP_NAME + "\n\n" +
-            "Version " + JSSHConst.VERSION.version() + "\n\n" +
-            "JVM: " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")\n\n" +
-            "A modern SSH client using Apache MINA SSHD\n\n" +
-            "Features:\n" +
-            "• Ed25519, ECDSA, RSA key support\n" +
-            "• VT100/ANSI terminal emulation\n" +
-            "• SFTP file browser\n" +
-            "• Port forwarding tunnels\n" +
-            "• Password and public key authentication",
-            "About JSSH",
-            JOptionPane.INFORMATION_MESSAGE);
+                JSSHConst.APP_NAME + " By XLOGISTX.IO \n\n" +
+                        "Version " + JSSHConst.VERSION.version() + "\n\n" +
+                        "JVM: " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")\n\n" +
+                        "A SSH client based on Apache MINA SSHD\n\n" +
+                        "Features:\n" +
+                        "• Ed25519, ECDSA, RSA key support\n" +
+                        "• VT100/ANSI terminal emulation\n" +
+                        "• SFTP file browser\n" +
+                        "• Port forwarding tunnels\n" +
+                        "• X11 forwarding\n" +
+                        "• Password and public key authentication",
+                "About JSSH",
+                JOptionPane.INFORMATION_MESSAGE);
     }
-    
+
     private void exitApplication() {
         // Close all sessions
         for (SessionTab tab : new ArrayList<>(sessions)) {
@@ -849,7 +851,7 @@ public class MainFrame extends JFrame {
         dispose();
         System.exit(0);
     }
-    
+
     /**
      * Session tab containing connection and terminal
      */
@@ -867,17 +869,17 @@ public class MainFrame extends JFrame {
         private char[] password;  // null if using key auth
         private String keyFile;   // null if using password auth
         private char[] passphrase;
-        
+
         public SessionTab(SSHConnection connection, TerminalPanel terminal) {
             this.connection = connection;
             this.terminal = terminal;
-            
+
             panel = new JPanel(new BorderLayout());
             panel.setBackground(Color.BLACK);
-            
+
             // Don't use scroll pane - terminal handles its own size
             panel.add(terminal, BorderLayout.CENTER);
-            
+
             // Handle resize
             panel.addComponentListener(new ComponentAdapter() {
                 @Override
@@ -889,7 +891,7 @@ public class MainFrame extends JFrame {
                     }
                 }
             });
-            
+
             // Request focus when panel is shown
             panel.addHierarchyListener(e -> {
                 if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0) {
@@ -899,28 +901,79 @@ public class MainFrame extends JFrame {
                 }
             });
         }
-        
-        public SSHConnection getConnection() { return connection; }
-        public TerminalPanel getTerminal() { return terminal; }
-        public JPanel getPanel() { return panel; }
-        public String getTitle() { return title; }
-        public void setTitle(String title) { this.title = title; }
+
+        public SSHConnection getConnection() {
+            return connection;
+        }
+
+        public TerminalPanel getTerminal() {
+            return terminal;
+        }
+
+        public JPanel getPanel() {
+            return panel;
+        }
+
+        public String getTitle() {
+            return title;
+        }
+
+        public void setTitle(String title) {
+            this.title = title;
+        }
 
         // Authentication info getters/setters for cloning
-        public String getHost() { return host; }
-        public void setHost(String host) { this.host = host; }
-        public int getPort() { return port; }
-        public void setPort(int port) { this.port = port; }
-        public String getUsername() { return username; }
-        public void setUsername(String username) { this.username = username; }
-        public char[] getPassword() { return password; }
-        public void setPassword(char[] password) { this.password = password != null ? password.clone() : null; }
-        public String getKeyFile() { return keyFile; }
-        public void setKeyFile(String keyFile) { this.keyFile = keyFile; }
-        public char[] getPassphrase() { return passphrase; }
-        public void setPassphrase(char[] passphrase) { this.passphrase = passphrase != null ? passphrase.clone() : null; }
+        public String getHost() {
+            return host;
+        }
 
-        public boolean isUsingKeyAuth() { return keyFile != null && !keyFile.isEmpty(); }
+        public void setHost(String host) {
+            this.host = host;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public void setPort(int port) {
+            this.port = port;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public char[] getPassword() {
+            return password;
+        }
+
+        public void setPassword(char[] password) {
+            this.password = password != null ? password.clone() : null;
+        }
+
+        public String getKeyFile() {
+            return keyFile;
+        }
+
+        public void setKeyFile(String keyFile) {
+            this.keyFile = keyFile;
+        }
+
+        public char[] getPassphrase() {
+            return passphrase;
+        }
+
+        public void setPassphrase(char[] passphrase) {
+            this.passphrase = passphrase != null ? passphrase.clone() : null;
+        }
+
+        public boolean isUsingKeyAuth() {
+            return keyFile != null && !keyFile.isEmpty();
+        }
 
         /**
          * Store connection info for cloning. The secret arrays are copied so a
@@ -994,7 +1047,8 @@ public class MainFrame extends JFrame {
                 public void onResize(int cols, int rows) {
                     try {
                         session.getConnection().resizeTerminal(cols, rows);
-                    } catch (IOException ex) { }
+                    } catch (IOException ex) {
+                    }
                 }
             });
         }
@@ -1025,9 +1079,9 @@ public class MainFrame extends JFrame {
         private void toggleSFTP() {
             if (!session.getConnection().isConnected()) {
                 JOptionPane.showMessageDialog(this,
-                    "No active connection",
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
+                        "No active connection",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
@@ -1053,9 +1107,9 @@ public class MainFrame extends JFrame {
                     toggleSftpItem.setText("Hide SFTP Browser");
                 } catch (Exception e) {
                     JOptionPane.showMessageDialog(this,
-                        "Failed to open SFTP: " + e.getMessage(),
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE);
+                            "Failed to open SFTP: " + e.getMessage(),
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE);
                 }
             }
         }
@@ -1132,9 +1186,9 @@ public class MainFrame extends JFrame {
         private void showTunnelDialog() {
             if (!session.getConnection().isConnected()) {
                 JOptionPane.showMessageDialog(this,
-                    "No active connection",
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
+                        "No active connection",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
@@ -1148,9 +1202,9 @@ public class MainFrame extends JFrame {
         private void cloneSession() {
             if (session.getHost() == null) {
                 JOptionPane.showMessageDialog(this,
-                    "Cannot clone this session - connection info not available",
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
+                        "Cannot clone this session - connection info not available",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
@@ -1178,15 +1232,15 @@ public class MainFrame extends JFrame {
                             case KNOWN_CHANGED:
                                 String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
                                 int changeResult = JOptionPane.showConfirmDialog(parentFrame,
-                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
-                                        "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
-                                        "Key type: " + keyType + "\n\n" +
-                                        "Old fingerprint:\n" + oldFingerprint + "\n\n" +
-                                        "New fingerprint:\n" + fingerprint + "\n\n" +
-                                        "Accept the new key?",
-                                    "Host Key Changed",
-                                    JOptionPane.YES_NO_OPTION,
-                                    JOptionPane.ERROR_MESSAGE);
+                                        "WARNING: HOST KEY HAS CHANGED!\n\n" +
+                                                "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
+                                                "Key type: " + keyType + "\n\n" +
+                                                "Old fingerprint:\n" + oldFingerprint + "\n\n" +
+                                                "New fingerprint:\n" + fingerprint + "\n\n" +
+                                                "Accept the new key?",
+                                        "Host Key Changed",
+                                        JOptionPane.YES_NO_OPTION,
+                                        JOptionPane.ERROR_MESSAGE);
                                 if (changeResult == JOptionPane.YES_OPTION) {
                                     knownHosts.addHost(h, p, keyType, fingerprint, key);
                                     return true;
@@ -1196,17 +1250,17 @@ public class MainFrame extends JFrame {
                             default:
                                 JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
                                 Object[] message = {
-                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
-                                        "Type: " + keyType + "\n" +
-                                        "Fingerprint: " + fingerprint + "\n\n" +
-                                        "Accept this key?",
-                                    rememberCheckbox
+                                        "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
+                                                "Type: " + keyType + "\n" +
+                                                "Fingerprint: " + fingerprint + "\n\n" +
+                                                "Accept this key?",
+                                        rememberCheckbox
                                 };
                                 int result = JOptionPane.showConfirmDialog(parentFrame,
-                                    message,
-                                    "Host Key Verification",
-                                    JOptionPane.YES_NO_OPTION,
-                                    JOptionPane.WARNING_MESSAGE);
+                                        message,
+                                        "Host Key Verification",
+                                        JOptionPane.YES_NO_OPTION,
+                                        JOptionPane.WARNING_MESSAGE);
                                 if (result == JOptionPane.YES_OPTION) {
                                     if (rememberCheckbox.isSelected()) {
                                         knownHosts.addHost(h, p, keyType, fingerprint, key);
@@ -1223,10 +1277,10 @@ public class MainFrame extends JFrame {
                         boolean authSuccess;
                         if (session.isUsingKeyAuth()) {
                             authSuccess = conn.authenticatePublicKey(username, session.getKeyFile(),
-                                session.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
+                                    session.getPassphrase(), JSSHConst.AUTH_TIMEOUT_MS);
                         } else {
                             authSuccess = conn.authenticatePassword(username, session.getPassword(),
-                                JSSHConst.AUTH_TIMEOUT_MS);
+                                    JSSHConst.AUTH_TIMEOUT_MS);
                         }
 
                         if (!authSuccess) {
@@ -1237,7 +1291,7 @@ public class MainFrame extends JFrame {
 
                         TerminalPanel terminal = new TerminalPanel(JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
                         ChannelShell shell = conn.openShell(JSSHConst.DEFAULT_TERMINAL_TYPE,
-                            JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
+                                JSSHConst.DEFAULT_TERMINAL_COLS, JSSHConst.DEFAULT_TERMINAL_ROWS);
                         terminal.setOutputStream(shell.getInvertedIn());
 
                         Thread reader = new Thread(() -> {
@@ -1266,7 +1320,7 @@ public class MainFrame extends JFrame {
                         SessionTab tab = new SessionTab(conn, terminal);
                         tab.setTitle(username + "@" + host + " (clone)");
                         tab.setConnectionInfo(host, port, username, session.getPassword(),
-                            session.getKeyFile(), session.getPassphrase());
+                                session.getKeyFile(), session.getPassphrase());
 
                         return tab;
 
@@ -1288,16 +1342,16 @@ public class MainFrame extends JFrame {
                         } else {
                             statusLabel.setText(" Clone failed");
                             JOptionPane.showMessageDialog(parentFrame,
-                                "Clone failed: " + error,
-                                "Error",
-                                JOptionPane.ERROR_MESSAGE);
+                                    "Clone failed: " + error,
+                                    "Error",
+                                    JOptionPane.ERROR_MESSAGE);
                         }
                     } catch (Exception e) {
                         statusLabel.setText(" Clone failed");
                         JOptionPane.showMessageDialog(parentFrame,
-                            "Clone failed: " + e.getMessage(),
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE);
+                                "Clone failed: " + e.getMessage(),
+                                "Error",
+                                JOptionPane.ERROR_MESSAGE);
                     }
                 }
             };
@@ -1307,9 +1361,9 @@ public class MainFrame extends JFrame {
 
         private void closeWindow() {
             int result = JOptionPane.showConfirmDialog(this,
-                "Close this session?",
-                "Confirm Close",
-                JOptionPane.YES_NO_OPTION);
+                    "Close this session?",
+                    "Confirm Close",
+                    JOptionPane.YES_NO_OPTION);
 
             if (result == JOptionPane.YES_OPTION) {
                 if (sftpPanel != null) {

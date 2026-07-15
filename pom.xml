@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>jssh</artifactId>
-    <version>1.2.0</version>
+    <version>1.2.1</version>
     <packaging>jar</packaging>
 
     <name>JSSH - Java SSH Client</name>
@@ -22,6 +22,7 @@
         <!-- Parent skips tests globally; this module has its own suite to run -->
         <skipTests>false</skipTests>
         <junit.version>6.0.1</junit.version>
+        <jdk.version>25</jdk.version>
     </properties>
     <dependencies>
 

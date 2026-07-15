@@ -7,11 +7,18 @@ import org.apache.sshd.common.channel.ChannelOutputStream;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.server.channel.AbstractServerChannel;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.UnixDomainSocketAddress;
+import java.nio.channels.Channels;
+import java.nio.channels.SocketChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 
 /**
@@ -20,6 +27,12 @@ import java.util.Collections;
  * forwarded display. This channel connects out to the user's real local X
  * server and pipes bytes in both directions.
  *
+ * <p>Connects to the local X server the same way {@code ssh -X} does: via the
+ * Unix-domain socket ({@code /tmp/.X11-unix/X<n>} on Linux, or the launchd path
+ * from {@code $DISPLAY} on macOS) when the display is local, falling back to TCP
+ * ({@code 127.0.0.1:6000+n}) for a remote display or when no Unix socket exists
+ * (e.g. Windows/VcXsrv). Unix-domain socket support requires Java 16+.
+ *
  * <p>MINA SSHD ships only the display-proxy direction (see
  * {@code org.apache.sshd.server.x11.DefaultX11ForwardSupport}); this class
  * provides the missing client acceptor direction, modeled on MINA's own
@@ -27,12 +40,14 @@ import java.util.Collections;
  */
 public class X11ClientChannel extends AbstractServerChannel {
 
-    private final InetSocketAddress xServerAddress;
+    private final String unixSocketPath;    // preferred local transport (may be null)
+    private final InetSocketAddress xServerAddress;   // TCP fallback / remote display
     private final int connectTimeoutMs;
     private final byte[] fakeCookie;   // what we advertised to the server (may be null)
     private final byte[] realCookie;   // local X server's cookie (may be null)
 
-    private Socket socket;
+    private Closeable connection;
+    private InputStream fromXServer;
     private OutputStream toXServer;
     private ChannelOutputStream toPeer;
 
@@ -40,9 +55,10 @@ public class X11ClientChannel extends AbstractServerChannel {
     private boolean authRewritten;
     private byte[] pending = new byte[0];
 
-    public X11ClientChannel(InetSocketAddress xServerAddress, int connectTimeoutMs,
+    public X11ClientChannel(String unixSocketPath, InetSocketAddress xServerAddress, int connectTimeoutMs,
                             byte[] fakeCookie, byte[] realCookie) {
         super("x11", Collections.emptyList(), null);
+        this.unixSocketPath = unixSocketPath;
         this.xServerAddress = xServerAddress;
         this.connectTimeoutMs = connectTimeoutMs;
         this.fakeCookie = fakeCookie;
@@ -61,22 +77,19 @@ public class X11ClientChannel extends AbstractServerChannel {
         // x11 channel-open payload is (originator address, originator port) - not needed here
         DefaultOpenFuture f = new DefaultOpenFuture(this, futureLock);
         try {
-            socket = new Socket();
-            socket.connect(xServerAddress, connectTimeoutMs);
-            socket.setTcpNoDelay(true);
-            toXServer = socket.getOutputStream();
+            String transport = connectToXServer();
             toPeer = new ChannelOutputStream(this, getRemoteWindow(), log, SshConstants.SSH_MSG_CHANNEL_DATA, true);
 
-            // Ensure the local X server socket is closed whenever the SSH channel closes
-            addCloseFutureListener(future -> closeSocket());
+            // Ensure the local X server connection is closed whenever the SSH channel closes
+            addCloseFutureListener(future -> closeConnection());
 
             Thread pump = new Thread(this::pumpXServerToPeer, "x11-forward-" + getChannelId());
             pump.setDaemon(true);
             pump.start();
 
             if (log.isDebugEnabled()) {
-                log.debug("[X11] connected to local X server {} (cookieRewrite={})",
-                        xServerAddress, canRewriteCookie() ? "yes" : "passthrough");
+                log.debug("[X11] connected to local X server via {} (cookieRewrite={})",
+                        transport, canRewriteCookie() ? "yes" : "passthrough");
             }
             // Required: tells MINA to send SSH_MSG_CHANNEL_OPEN_CONFIRMATION so the
             // server starts forwarding X11 data to us. Without this the channel
@@ -84,12 +97,45 @@ public class X11ClientChannel extends AbstractServerChannel {
             signalChannelOpenSuccess();
             f.setOpened();
         } catch (IOException e) {
-            log.warn("[X11] failed to connect to local X server {}: {}", xServerAddress, e.getMessage());
+            log.warn("[X11] failed to connect to local X server (unix={}, tcp={}): {}",
+                    unixSocketPath, xServerAddress, e.getMessage());
             f.setException(e);
             close(true);
         }
-        // A connect failure keeps the warn above - it's an actionable error, not noise
         return f;
+    }
+
+    /**
+     * Connect to the local X server, preferring the Unix-domain socket (like
+     * {@code ssh -X}) and falling back to TCP. Returns a short label of the
+     * transport used, for logging.
+     */
+    private String connectToXServer() throws IOException {
+        if (unixSocketPath != null) {
+            Path path = Paths.get(unixSocketPath);
+            if (Files.exists(path)) {
+                try {
+                    SocketChannel ch = SocketChannel.open(UnixDomainSocketAddress.of(path));
+                    connection = ch;
+                    fromXServer = Channels.newInputStream(ch);
+                    toXServer = Channels.newOutputStream(ch);
+                    return "unix:" + unixSocketPath;
+                } catch (IOException e) {
+                    // Fall back to TCP below
+                    if (log.isDebugEnabled()) {
+                        log.debug("[X11] unix socket {} failed ({}); falling back to TCP", unixSocketPath, e.getMessage());
+                    }
+                }
+            }
+        }
+
+        Socket socket = new Socket();
+        socket.connect(xServerAddress, connectTimeoutMs);
+        socket.setTcpNoDelay(true);
+        connection = socket;
+        fromXServer = socket.getInputStream();
+        toXServer = socket.getOutputStream();
+        return "tcp:" + xServerAddress;
     }
 
     /**
@@ -135,9 +181,8 @@ public class X11ClientChannel extends AbstractServerChannel {
     private void pumpXServerToPeer() {
         byte[] buf = new byte[8192];
         try {
-            InputStream in = socket.getInputStream();
             int n;
-            while ((n = in.read(buf)) >= 0) {
+            while ((n = fromXServer.read(buf)) >= 0) {
                 if (n > 0) {
                     toPeer.write(buf, 0, n);
                     toPeer.flush();
@@ -159,13 +204,13 @@ public class X11ClientChannel extends AbstractServerChannel {
     @Override
     public void handleEof() throws IOException {
         super.handleEof();
-        closeSocket();
+        closeConnection();
     }
 
-    private void closeSocket() {
+    private void closeConnection() {
         try {
-            if (socket != null && !socket.isClosed()) {
-                socket.close();
+            if (connection != null) {
+                connection.close();
             }
         } catch (IOException ignore) {
         }

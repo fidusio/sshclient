@@ -44,9 +44,12 @@ A modern GUI SSH client written in Java using Apache MINA SSHD.
 
 ## Requirements
 
-- Java 8+ to run the application (the code is compiled with `--release 8`)
+- Java 25+ to run and build (the code is compiled with `--release 25`)
 - Maven 3.6+ to build
-- Java 17+ only if you want to run the unit tests (they use JUnit 5)
+
+Java 25 is required because X11 forwarding connects to the local X server's
+Unix-domain socket (`java.net.UnixDomainSocketAddress`); the project targets
+Java 25.
 
 ## Building
 
@@ -56,9 +59,8 @@ mvn clean package
 
 This creates `target/jssh.jar` with all dependencies included.
 
-The Maven compiler is pinned to Java 8 via `<release>8</release>` (inherited
-`${jdk.version}` from the parent POM), so any accidental use of a post-8 API is a
-hard compile error.
+The Maven compiler target is set via `<jdk.version>25</jdk.version>` in this
+module's `pom.xml` (overriding the parent), producing `--release 25`.
 
 ## Testing
 
@@ -70,8 +72,7 @@ mvn test
 ```
 
 The parent POM skips tests globally; this module re-enables them via
-`<skipTests>false</skipTests>`. Running the tests requires Java 17+ (JUnit 5),
-even though the application itself targets Java 8.
+`<skipTests>false</skipTests>`.
 
 ## Running
 
@@ -122,16 +123,24 @@ java -jar jssh.jar user@hostname:2222
 
 ### X11 Forwarding
 
-1. Start a local X server:
+1. Have a local X server running:
+   - **Linux:** already running (`$DISPLAY` is set). No TCP configuration needed —
+     JSSH connects to the X server's Unix-domain socket (`/tmp/.X11-unix/X<n>`),
+     the same as `ssh -X`.
+   - **macOS:** XQuartz. JSSH uses the launchd Unix socket from `$DISPLAY`; no need
+     to enable "network clients".
    - **Windows:** VcXsrv or Xming (XLaunch → "Multiple windows" → "Start no
-     client"). If you leave X server authentication enabled, X11 uses the cookie
-     from `~/.Xauthority` / `$XAUTHORITY`; otherwise check "Disable access control".
-   - **Linux:** already running (`$DISPLAY` is set)
-   - **macOS:** XQuartz
+     client"). There is no Unix socket, so JSSH connects over TCP to
+     `127.0.0.1:6000`. If X server authentication is on, X11 uses the cookie from
+     `~/.Xauthority` / `$XAUTHORITY`; otherwise check "Disable access control".
 2. Open **File → Connect** (not Quick Connect) → **Terminal** tab
 3. Check **Enable X11 Forwarding** (display defaults to `localhost:0`)
 4. Connect, then run a GUI program on the server (e.g. `xeyes`, `xclock`); the
    server must have `X11Forwarding yes` in `sshd_config`
+
+JSSH prefers the local X server's Unix-domain socket for a local display and falls
+back to TCP `127.0.0.1:6000+n` (for a remote display host, or where no socket
+exists).
 
 X11 forwarding is not propagated to cloned sessions, and can only be enabled at
 connect time (not after a session is already open).
@@ -198,7 +207,7 @@ Supported:
 
 ## How to use it
 
-Make sure you have jre 1.8+ installed on your system.\
+Make sure you have a JRE 25+ installed on your system.\
 Get [jar-loader.jar](https://xlogistx.io/apps/jar-loader.jar)\
 Get [jssh.jar](https://xlogistx.io/apps/jssh.jar)
 

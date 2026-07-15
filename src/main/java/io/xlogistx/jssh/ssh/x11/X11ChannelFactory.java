@@ -17,13 +17,15 @@ public class X11ChannelFactory implements ChannelFactory {
 
     public static final String X11_CHANNEL_TYPE = "x11";
 
+    private final String unixSocketPath;
     private final InetSocketAddress xServerAddress;
     private final int connectTimeoutMs;
     private final byte[] fakeCookie;
     private final byte[] realCookie;
 
-    public X11ChannelFactory(InetSocketAddress xServerAddress, int connectTimeoutMs,
+    public X11ChannelFactory(String unixSocketPath, InetSocketAddress xServerAddress, int connectTimeoutMs,
                              byte[] fakeCookie, byte[] realCookie) {
+        this.unixSocketPath = unixSocketPath;
         this.xServerAddress = xServerAddress;
         this.connectTimeoutMs = connectTimeoutMs;
         this.fakeCookie = fakeCookie;
@@ -42,6 +44,6 @@ public class X11ChannelFactory implements ChannelFactory {
             log.debug("[X11] server opened an x11 channel; bridging to local X server {} (localCookie={})",
                     xServerAddress, realCookie != null ? "present" : "none");
         }
-        return new X11ClientChannel(xServerAddress, connectTimeoutMs, fakeCookie, realCookie);
+        return new X11ClientChannel(unixSocketPath, xServerAddress, connectTimeoutMs, fakeCookie, realCookie);
     }
 }

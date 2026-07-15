@@ -13,13 +13,14 @@ JSSH — a Swing GUI SSH client built on Apache MINA SSHD. Single Maven module,
 ```bash
 mvn clean package          # builds target/jssh.jar (fat jar via assembly)
 java -jar target/jssh.jar  # run the GUI
-mvn test                   # run unit tests (needs Java 17+ for JUnit 5)
+mvn test                   # run unit tests (JUnit 5)
 ```
 
-- **Java level:** compiled with `<release>8</release>` (value comes from the
-  parent POM's `${jdk.version}`). The application must stay Java 8-compatible —
-  do not use post-8 JDK APIs (e.g. `InputStream.readAllBytes`, `List.of`, `var`).
-  `--release 8` will reject them at compile time.
+- **Java level:** compiled with `--release 25`, set via `<jdk.version>25</jdk.version>`
+  in this module's `pom.xml` (overriding the parent's `8`). The app requires
+  Java 25+ to run. It was previously Java 8-only; the bump to 25 was needed for
+  `java.net.UnixDomainSocketAddress` (X11 forwarding to the local X server socket).
+  Modern APIs are now fine.
 - **Tests:** the parent POM sets `skipTests=true` globally; this module overrides
   it to `false`. Tests use JUnit 5 (Jupiter). To run a specific test outside
   Maven, use the JUnit Platform launcher, not `JUnitCore`.
@@ -67,6 +68,11 @@ mvn test                   # run unit tests (needs Java 17+ for JUnit 5)
     `f.setOpened()`** — otherwise no channel-open confirmation is sent, the server
     never forwards data, and GUI apps connect but show no window (no error). Model
     on MINA's `TcpipServerChannel`.
+  - Transport: connects to the local X server's **Unix-domain socket** for a local
+    display (`/tmp/.X11-unix/X<n>` on Linux, the launchd path from `$DISPLAY` on
+    macOS), like `ssh -X`, and falls back to TCP `127.0.0.1:6000+n` for a remote
+    display host or where no socket exists (Windows/VcXsrv). The Unix-socket path
+    is why the project needs Java 16+.
 - **Studying MINA internals:** the sources jars are in the local repo
   (`*-sources.jar`); unzip and read them rather than guessing at the API.
 

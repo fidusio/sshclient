@@ -407,13 +407,17 @@ public class SSHConnection {
      */
     private byte[] setupX11Forwarding(String x11Host, int displayNumber) {
         try {
-            // Where the local X server listens: host:(6000+display). A remote/unix
-            // host maps to loopback since forwarding targets the local display.
-            String host = (x11Host == null || x11Host.isEmpty()
-                    || "unix".equalsIgnoreCase(x11Host) || "localhost".equalsIgnoreCase(x11Host))
-                    ? "127.0.0.1" : x11Host;
+            boolean local = x11Host == null || x11Host.isEmpty()
+                    || "unix".equalsIgnoreCase(x11Host) || "localhost".equalsIgnoreCase(x11Host)
+                    || "127.0.0.1".equals(x11Host);
+
+            // For a local display, connect to the X server's Unix-domain socket
+            // (like `ssh -X`); TCP is the fallback and the only option for a
+            // remote display host or on systems without the socket (e.g. Windows).
+            String unixSocketPath = local ? resolveLocalX11Socket(displayNumber) : null;
+            String tcpHost = local ? "127.0.0.1" : x11Host;
             int port = JSSHConst.X_SERVER_PORT + displayNumber;
-            java.net.InetSocketAddress xServer = new java.net.InetSocketAddress(host, port);
+            java.net.InetSocketAddress xServer = new java.net.InetSocketAddress(tcpHost, port);
 
             byte[] fakeCookie = new byte[16];
             new java.security.SecureRandom().nextBytes(fakeCookie);
@@ -421,7 +425,7 @@ public class SSHConnection {
 
             io.xlogistx.jssh.ssh.x11.X11ChannelFactory factory =
                     new io.xlogistx.jssh.ssh.x11.X11ChannelFactory(
-                            xServer, JSSHConst.X11_SOCKET_TIMEOUT_MS * 10, fakeCookie, realCookie);
+                            unixSocketPath, xServer, JSSHConst.X11_SOCKET_TIMEOUT_MS * 10, fakeCookie, realCookie);
             registerChannelFactory(factory);
 
             return fakeCookie;
@@ -429,6 +433,23 @@ public class SSHConnection {
             System.err.println("X11 forwarding setup failed: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Resolve the local X server's Unix-domain socket path. Uses the launchd
+     * path from $DISPLAY on macOS (a path-style display) and the standard
+     * {@code /tmp/.X11-unix/X<n>} on Linux. Returns a path that may not exist;
+     * the caller falls back to TCP when it doesn't.
+     */
+    private static String resolveLocalX11Socket(int displayNumber) {
+        String display = System.getenv("DISPLAY");
+        if (display != null && display.startsWith("/")) {
+            // macOS/launchd: DISPLAY is the socket path plus a :display[.screen] suffix
+            int colon = display.lastIndexOf(':');
+            int dot = colon >= 0 ? display.indexOf('.', colon) : -1;
+            return dot > colon ? display.substring(0, dot) : display;
+        }
+        return "/tmp/.X11-unix/X" + displayNumber;
     }
 
     /**

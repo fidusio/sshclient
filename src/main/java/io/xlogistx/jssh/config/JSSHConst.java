@@ -24,7 +24,7 @@ public final class JSSHConst {
 
     // Static initializer to load version from properties file
     static {
-        String version = "1.0.7"; // fallback default
+        String version = "1.2.1"; // fallback default
         try (InputStream is = JSSHConst.class.getResourceAsStream("/jssh-version.properties")) {
             if (is != null) {
                 Properties props = new Properties();
