@@ -214,21 +214,57 @@ public class MainFrame extends JFrame {
         String user = System.getProperty("user.name");
         String host;
         int port = JSSHConst.DEFAULT_SSH_PORT;
-        
-        if (input.contains("@")) {
-            String[] parts = input.split("@");
-            user = parts[0];
-            input = parts[1];
+
+        // Use the last '@' as separator so usernames containing '@' still work
+        int at = input.lastIndexOf('@');
+        if (at >= 0) {
+            if (at > 0) {
+                user = input.substring(0, at);
+            }
+            input = input.substring(at + 1);
         }
-        
-        if (input.contains(":")) {
-            String[] parts = input.split(":");
-            host = parts[0];
-            port = Integer.parseInt(parts[1]);
-        } else {
-            host = input;
+
+        try {
+            if (input.startsWith("[")) {
+                // Bracketed IPv6: [addr] or [addr]:port
+                int end = input.indexOf(']');
+                if (end < 0) {
+                    throw new IllegalArgumentException("missing ']'");
+                }
+                host = input.substring(1, end);
+                if (end + 1 < input.length()) {
+                    if (input.charAt(end + 1) != ':') {
+                        throw new IllegalArgumentException("expected ':' after ']'");
+                    }
+                    port = Integer.parseInt(input.substring(end + 2));
+                }
+            } else {
+                int colon = input.indexOf(':');
+                // A single colon separates host:port; multiple colons mean a bare IPv6 address
+                if (colon >= 0 && colon == input.lastIndexOf(':')) {
+                    host = input.substring(0, colon);
+                    port = Integer.parseInt(input.substring(colon + 1));
+                } else {
+                    host = input;
+                }
+            }
+
+            if (host.isEmpty()) {
+                throw new IllegalArgumentException("empty host");
+            }
+            if (port < JSSHConst.MIN_PORT || port > JSSHConst.MAX_PORT) {
+                throw new IllegalArgumentException("port out of range: " + port);
+            }
+        } catch (IllegalArgumentException e) {
+            JOptionPane.showMessageDialog(this,
+                "Invalid connection string.\n" +
+                "Expected: user@host, user@host:port or user@[ipv6]:port\n" +
+                "(" + e.getMessage() + ")",
+                "Quick Connect",
+                JOptionPane.ERROR_MESSAGE);
+            return;
         }
-        
+
         quickConnect(host, port, user);
     }
     
@@ -237,26 +273,26 @@ public class MainFrame extends JFrame {
             user = System.getProperty("user.name");
         }
         
-        String password = showPasswordDialog("Password for " + user + "@" + host);
+        char[] password = showPasswordDialog("Password for " + user + "@" + host);
         if (password == null) return;
-        
+
         connectWithPassword(host, port, user, password);
     }
-    
-    private String showPasswordDialog(String prompt) {
+
+    private char[] showPasswordDialog(String prompt) {
         JPasswordField passwordField = new JPasswordField();
-        int result = JOptionPane.showConfirmDialog(this, 
+        int result = JOptionPane.showConfirmDialog(this,
             new Object[] { prompt, passwordField },
-            "Authentication", 
+            "Authentication",
             JOptionPane.OK_CANCEL_OPTION);
-        
+
         if (result == JOptionPane.OK_OPTION) {
-            return new String(passwordField.getPassword());
+            return passwordField.getPassword();
         }
         return null;
     }
-    
-    public void connectWithPassword(String host, int port, String username, String password) {
+
+    public void connectWithPassword(String host, int port, String username, char[] password) {
         // Create connection in background thread
         SwingWorker<SessionTab, Void> worker = new SwingWorker<SessionTab, Void>() {
             private String error = null;
@@ -268,7 +304,7 @@ public class MainFrame extends JFrame {
                 // Host key verification with known hosts support
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
                     KnownHostsManager knownHosts = KnownHostsManager.getInstance();
-                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint, key);
 
                     switch (verifyResult) {
                         case KNOWN_OK:
@@ -327,11 +363,11 @@ public class MainFrame extends JFrame {
                 });
                 
                 try {
-                    statusLabel.setText(" Connecting to " + host + "...");
-                    conn.connect(host, port, 30000);
-                    
-                    statusLabel.setText(" Authenticating...");
-                    if (!conn.authenticatePassword(username, password, 30000)) {
+                    setStatus(" Connecting to " + host + "...");
+                    conn.connect(host, port, JSSHConst.CONNECTION_TIMEOUT_MS);
+
+                    setStatus(" Authenticating...");
+                    if (!conn.authenticatePassword(username, password, JSSHConst.AUTH_TIMEOUT_MS)) {
                         error = "Authentication failed";
                         conn.close();
                         return null;
@@ -408,10 +444,13 @@ public class MainFrame extends JFrame {
                         "Connection failed: " + e.getMessage(),
                         "Error",
                         JOptionPane.ERROR_MESSAGE);
+                } finally {
+                    // The session tab keeps its own copy - wipe ours
+                    java.util.Arrays.fill(password, '\0');
                 }
             }
         };
-        
+
         worker.execute();
     }
     
@@ -545,7 +584,7 @@ public class MainFrame extends JFrame {
                 // Use same host key verifier
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
                     KnownHostsManager knownHosts = KnownHostsManager.getInstance();
-                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint, key);
 
                     switch (verifyResult) {
                         case KNOWN_OK:
@@ -711,6 +750,17 @@ public class MainFrame extends JFrame {
         }
     }
     
+    /**
+     * Set the status bar text, marshaling to the EDT if called from another thread.
+     */
+    private void setStatus(String text) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            statusLabel.setText(text);
+        } else {
+            SwingUtilities.invokeLater(() -> statusLabel.setText(text));
+        }
+    }
+
     private SessionTab getCurrentSession() {
         int index = tabbedPane.getSelectedIndex();
         if (index >= 0 && index < sessions.size()) {
@@ -809,13 +859,14 @@ public class MainFrame extends JFrame {
         private final JPanel panel;
         private String title;
 
-        // Authentication info for cloning
+        // Authentication info for cloning - secrets kept as char[] so they can
+        // be wiped when the tab closes instead of lingering in the heap
         private String host;
         private int port;
         private String username;
-        private String password;  // null if using key auth
+        private char[] password;  // null if using key auth
         private String keyFile;   // null if using password auth
-        private String passphrase;
+        private char[] passphrase;
         
         public SessionTab(SSHConnection connection, TerminalPanel terminal) {
             this.connection = connection;
@@ -862,28 +913,38 @@ public class MainFrame extends JFrame {
         public void setPort(int port) { this.port = port; }
         public String getUsername() { return username; }
         public void setUsername(String username) { this.username = username; }
-        public String getPassword() { return password; }
-        public void setPassword(String password) { this.password = password; }
+        public char[] getPassword() { return password; }
+        public void setPassword(char[] password) { this.password = password != null ? password.clone() : null; }
         public String getKeyFile() { return keyFile; }
         public void setKeyFile(String keyFile) { this.keyFile = keyFile; }
-        public String getPassphrase() { return passphrase; }
-        public void setPassphrase(String passphrase) { this.passphrase = passphrase; }
+        public char[] getPassphrase() { return passphrase; }
+        public void setPassphrase(char[] passphrase) { this.passphrase = passphrase != null ? passphrase.clone() : null; }
 
         public boolean isUsingKeyAuth() { return keyFile != null && !keyFile.isEmpty(); }
 
         /**
-         * Store connection info for cloning
+         * Store connection info for cloning. The secret arrays are copied so a
+         * source tab being closed (and wiped) cannot blank a clone's credentials.
          */
-        public void setConnectionInfo(String host, int port, String username, String password, String keyFile, String passphrase) {
+        public void setConnectionInfo(String host, int port, String username, char[] password, String keyFile, char[] passphrase) {
             this.host = host;
             this.port = port;
             this.username = username;
-            this.password = password;
+            this.password = password != null ? password.clone() : null;
             this.keyFile = keyFile;
-            this.passphrase = passphrase;
+            this.passphrase = passphrase != null ? passphrase.clone() : null;
         }
 
         public void close() {
+            // Wipe stored credentials so they don't linger in the heap
+            if (password != null) {
+                java.util.Arrays.fill(password, '\0');
+                password = null;
+            }
+            if (passphrase != null) {
+                java.util.Arrays.fill(passphrase, '\0');
+                passphrase = null;
+            }
             connection.close();
         }
     }
@@ -947,17 +1008,6 @@ public class MainFrame extends JFrame {
             splitPane.setResizeWeight(0.6); // Terminal gets 60% by default
             splitPane.setOneTouchExpandable(true);
 
-            // Listen for SFTP panel removal (e.g., when closed via its Close button)
-            splitPane.addPropertyChangeListener(JSplitPane.BOTTOM, evt -> {
-                if (evt.getNewValue() == null && sftpVisible) {
-                    sftpVisible = false;
-                    sftpPanel = null;
-                    if (toggleSftpItem != null) {
-                        toggleSftpItem.setText("Show SFTP Browser");
-                    }
-                }
-            });
-
             // Initially just show the terminal (no bottom component)
             add(splitPane, BorderLayout.CENTER);
 
@@ -992,6 +1042,9 @@ public class MainFrame extends JFrame {
                 try {
                     if (sftpPanel == null) {
                         sftpPanel = new SFTPPanel(session.getConnection());
+                        // The panel's Close button closes its SFTP client - remove it
+                        // and reset our state so the next Show creates a fresh panel
+                        sftpPanel.setOnClose(this::onSftpPanelClosed);
                     }
                     splitPane.setBottomComponent(sftpPanel);
                     splitPane.setDividerSize(8);
@@ -1004,6 +1057,16 @@ public class MainFrame extends JFrame {
                         "Error",
                         JOptionPane.ERROR_MESSAGE);
                 }
+            }
+        }
+
+        private void onSftpPanelClosed() {
+            splitPane.setBottomComponent(null);
+            splitPane.setDividerSize(0);
+            sftpPanel = null;
+            sftpVisible = false;
+            if (toggleSftpItem != null) {
+                toggleSftpItem.setText("Show SFTP Browser");
             }
         }
 
@@ -1107,7 +1170,7 @@ public class MainFrame extends JFrame {
 
                     conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
                         KnownHostsManager knownHosts = KnownHostsManager.getInstance();
-                        KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+                        KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint, key);
 
                         switch (verifyResult) {
                             case KNOWN_OK:

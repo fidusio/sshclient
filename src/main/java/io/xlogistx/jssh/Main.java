@@ -22,24 +22,36 @@ public class Main {
         String user = null;
         int port = JSSHConst.DEFAULT_SSH_PORT;
         
-        for (int i = 0; i < args.length; i++) {
-            if (args[i].equals("-h") || args[i].equals("--host")) {
-                if (i + 1 < args.length) host = args[++i];
-            } else if (args[i].equals("-u") || args[i].equals("--user")) {
-                if (i + 1 < args.length) user = args[++i];
-            } else if (args[i].equals("-p") || args[i].equals("--port")) {
-                if (i + 1 < args.length) port = Integer.parseInt(args[++i]);
-            } else if (args[i].contains("@")) {
-                // user@host format
-                String[] parts = args[i].split("@");
-                user = parts[0];
-                host = parts[1];
-                if (host.contains(":")) {
-                    String[] hostPort = host.split(":");
-                    host = hostPort[0];
-                    port = Integer.parseInt(hostPort[1]);
+        try {
+            for (int i = 0; i < args.length; i++) {
+                if (args[i].equals("-h") || args[i].equals("--host")) {
+                    if (i + 1 < args.length) host = args[++i];
+                } else if (args[i].equals("-u") || args[i].equals("--user")) {
+                    if (i + 1 < args.length) user = args[++i];
+                } else if (args[i].equals("-p") || args[i].equals("--port")) {
+                    if (i + 1 < args.length) port = Integer.parseInt(args[++i]);
+                } else if (args[i].contains("@")) {
+                    // user@host format - use the last '@' so usernames containing '@' still work
+                    int at = args[i].lastIndexOf('@');
+                    if (at > 0) {
+                        user = args[i].substring(0, at);
+                    }
+                    host = args[i].substring(at + 1);
+                    int colon = host.indexOf(':');
+                    // A single colon separates host:port; multiple colons mean a bare IPv6 address
+                    if (colon >= 0 && colon == host.lastIndexOf(':')) {
+                        port = Integer.parseInt(host.substring(colon + 1));
+                        host = host.substring(0, colon);
+                    }
                 }
             }
+            if (port < 1 || port > 65535) {
+                throw new NumberFormatException("port out of range: " + port);
+            }
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid port (" + e.getMessage() + ")");
+            System.err.println("Usage: jssh [-h host] [-p port] [-u user] [user@host[:port]]");
+            System.exit(1);
         }
         
         final String finalHost = host;

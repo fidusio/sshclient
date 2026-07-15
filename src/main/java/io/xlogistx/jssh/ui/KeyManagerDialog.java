@@ -218,68 +218,97 @@ public class KeyManagerDialog extends JDialog {
         String comment = commentField.getText().trim();
         String type = (String) typeCombo.getSelectedItem();
         
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-        
-        try {
-            // Create .ssh directory if needed
-            File dir = new File(sshDir);
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
-            
-            File privateFile = new File(sshDir, filename);
-            File publicFile = new File(sshDir, filename + ".pub");
-            
-            if (privateFile.exists()) {
-                int overwrite = JOptionPane.showConfirmDialog(this,
-                    "Key already exists. Overwrite?",
-                    "Confirm",
-                    JOptionPane.YES_NO_OPTION);
-                if (overwrite != JOptionPane.YES_OPTION) return;
-            }
-            
-            // Generate key pair using ssh-keygen (most reliable)
-            String keyType;
-            if (type.startsWith("Ed25519")) keyType = "ed25519";
-            else if (type.startsWith("ECDSA")) keyType = "ecdsa";
-            else keyType = "rsa";
-            
-            ProcessBuilder pb = new ProcessBuilder(
-                "ssh-keygen", "-t", keyType, "-f", privateFile.getAbsolutePath(),
-                "-N", pass, "-C", comment
-            );
-            
-            if (keyType.equals("rsa")) {
-                pb.command().add("-b");
-                pb.command().add(String.valueOf(JSSHConst.RSA_KEY_BITS));
-            }
-            
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-            
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                throw new IOException("ssh-keygen failed with exit code " + exitCode);
-            }
-            
-            loadKeys();
-            
-            JOptionPane.showMessageDialog(this,
-                "Key generated successfully!\n\n" +
-                "Private key: " + privateFile.getAbsolutePath() + "\n" +
-                "Public key: " + publicFile.getAbsolutePath(),
-                "Success",
-                JOptionPane.INFORMATION_MESSAGE);
-            
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(this,
-                "Failed to generate key: " + e.getMessage() + "\n\n" +
-                "Make sure ssh-keygen is installed.",
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
-        } finally {
-            setCursor(Cursor.getDefaultCursor());
+        // Create .ssh directory if needed
+        File dir = new File(sshDir);
+        if (!dir.exists()) {
+            dir.mkdirs();
         }
+
+        File privateFile = new File(sshDir, filename);
+        File publicFile = new File(sshDir, filename + ".pub");
+
+        if (privateFile.exists() || publicFile.exists()) {
+            int overwrite = JOptionPane.showConfirmDialog(this,
+                "Key already exists. Overwrite?",
+                "Confirm",
+                JOptionPane.YES_NO_OPTION);
+            if (overwrite != JOptionPane.YES_OPTION) return;
+            // Remove the old files ourselves, otherwise ssh-keygen prompts
+            // "Overwrite (y/n)?" on stdin and hangs forever
+            privateFile.delete();
+            publicFile.delete();
+        }
+
+        // Generate key pair using ssh-keygen (most reliable)
+        String keyType;
+        if (type.startsWith("Ed25519")) keyType = "ed25519";
+        else if (type.startsWith("ECDSA")) keyType = "ecdsa";
+        else keyType = "rsa";
+
+        ProcessBuilder pb = new ProcessBuilder(
+            "ssh-keygen", "-t", keyType, "-f", privateFile.getAbsolutePath(),
+            "-N", pass, "-C", comment
+        );
+
+        if (keyType.equals("rsa")) {
+            pb.command().add("-b");
+            pb.command().add(String.valueOf(JSSHConst.RSA_KEY_BITS));
+        }
+
+        pb.redirectErrorStream(true);
+
+        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+
+        // Run ssh-keygen off the EDT so an unexpected prompt or slow run can't freeze the UI
+        SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                Process process = pb.start();
+                // No input will ever be supplied - EOF any unexpected prompt instead of hanging
+                process.getOutputStream().close();
+
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                byte[] buf = new byte[1024];
+                int n;
+                try (InputStream is = process.getInputStream()) {
+                    while ((n = is.read(buf)) >= 0) {
+                        output.write(buf, 0, n);
+                    }
+                }
+
+                if (!process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    throw new IOException("ssh-keygen timed out");
+                }
+                if (process.exitValue() != 0) {
+                    throw new IOException("ssh-keygen failed with exit code " + process.exitValue()
+                        + ": " + output.toString().trim());
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                setCursor(Cursor.getDefaultCursor());
+                try {
+                    get();
+                    loadKeys();
+                    JOptionPane.showMessageDialog(KeyManagerDialog.this,
+                        "Key generated successfully!\n\n" +
+                        "Private key: " + privateFile.getAbsolutePath() + "\n" +
+                        "Public key: " + publicFile.getAbsolutePath(),
+                        "Success",
+                        JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception e) {
+                    JOptionPane.showMessageDialog(KeyManagerDialog.this,
+                        "Failed to generate key: " + e.getMessage() + "\n\n" +
+                        "Make sure ssh-keygen is installed.",
+                        "Error",
+                        JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        };
+        worker.execute();
     }
     
     private void importKey() {

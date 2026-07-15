@@ -11,22 +11,18 @@
     </parent>
 
     <artifactId>jssh</artifactId>
-    <version>1.1.2</version>
+    <version>1.2.0</version>
     <packaging>jar</packaging>
 
     <name>JSSH - Java SSH Client</name>
     <description>A modern GUI SSH client using Apache MINA SSHD</description>
 
     <properties>
-<!--        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>-->
-<!--        <jdk.version>1.8</jdk.version>-->
-
-<!--        <apache-ssh.version>2.16.0</apache-ssh.version>-->
         <slf4j.version>2.0.9</slf4j.version>
-<!--        <bc.version>1.83</bc.version>-->
-<!--        <zoxweb-core.version>2.3.9</zoxweb-core.version>-->
+        <!-- Parent skips tests globally; this module has its own suite to run -->
+        <skipTests>false</skipTests>
+        <junit.version>6.0.1</junit.version>
     </properties>
-
     <dependencies>
 
         <dependency>
@@ -74,6 +70,14 @@
             <artifactId>slf4j-simple</artifactId>
             <version>${slf4j.version}</version>
         </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -99,8 +103,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${maven-compiler-plugin.version}</version>
                 <configuration>
-                    <source>${jdk.version}</source>
-                    <target>${jdk.version}</target>
+                    <release>${jdk.version}</release>
                 </configuration>
             </plugin>
 

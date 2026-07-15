@@ -331,6 +331,8 @@ public class ConnectDialog extends JDialog {
 
         gbc.gridx = 3;
         portSpinner = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_SSH_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
+        // Ports are not amounts - no digit grouping (8080, not 8,080)
+        portSpinner.setEditor(new JSpinner.NumberEditor(portSpinner, "#"));
         panel.add(portSpinner, gbc);
 
         // Username
@@ -527,25 +529,26 @@ public class ConnectDialog extends JDialog {
             return;
         }
 
-        // Get password/key info before connecting
-        final String password;
+        // Get password/key info before connecting - kept as char[] so the
+        // session tab can wipe them when it closes
+        final char[] password;
         final String keyFile;
-        final String passphrase;
+        final char[] passphrase;
         final boolean useKey = useKeyAuth.isSelected();
 
         if (useKey) {
             keyFile = keyFileField.getText().trim();
-            passphrase = new String(passphraseField.getPassword());
+            passphrase = passphraseField.getPassword();
             password = null;
             if (keyFile.isEmpty()) {
                 JOptionPane.showMessageDialog(this, "Please select a key file", "Error", JOptionPane.ERROR_MESSAGE);
                 return;
             }
         } else {
-            password = new String(passwordField.getPassword());
+            password = passwordField.getPassword();
             keyFile = null;
             passphrase = null;
-            if (password.isEmpty()) {
+            if (password.length == 0) {
                 JOptionPane.showMessageDialog(this, "Please enter a password", "Error", JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -562,7 +565,7 @@ public class ConnectDialog extends JDialog {
                 // Host key verification with known hosts support
                 conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
                     KnownHostsManager knownHosts = KnownHostsManager.getInstance();
-                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint);
+                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint, key);
 
                     switch (verifyResult) {
                         case KNOWN_OK:
@@ -626,8 +629,7 @@ public class ConnectDialog extends JDialog {
                 // Now authenticate (separate from connect)
                 boolean authenticated;
                 if (useKey) {
-                    authenticated = conn.authenticatePublicKey(username, keyFile,
-                            passphrase.isEmpty() ? null : passphrase, 30000);
+                    authenticated = conn.authenticatePublicKey(username, keyFile, passphrase, 30000);
                 } else {
                     authenticated = conn.authenticatePassword(username, password, 30000);
                 }

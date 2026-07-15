@@ -2,9 +2,7 @@ package io.xlogistx.jssh.ssh;
 
 import io.xlogistx.jssh.config.JSSHConst;
 import org.apache.sshd.client.SshClient;
-import org.apache.sshd.client.channel.ChannelExec;
 import org.apache.sshd.client.channel.ChannelShell;
-import org.apache.sshd.client.channel.ClientChannelEvent;
 import org.apache.sshd.client.future.ConnectFuture;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
@@ -31,7 +29,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -48,7 +45,11 @@ public class SSHConnection {
     private int port;
     private String username;
     private String serverVersion;
-    private boolean connected = false;
+    private volatile boolean connected = false;
+    // Ensures onDisconnected is delivered to the listener exactly once, no matter
+    // how many of disconnect()/sessionDisconnect/sessionClosed fire
+    private final java.util.concurrent.atomic.AtomicBoolean disconnectNotified =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private HostKeyVerifier hostKeyVerifier;
 
@@ -88,22 +89,23 @@ public class SSHConnection {
         client.setServerKeyVerifier(new ServerKeyVerifier() {
             @Override
             public boolean verifyServerKey(ClientSession session, SocketAddress remoteAddress, PublicKey serverKey) {
-                if (hostKeyVerifier == null) {
-                    return true; // Accept all if no verifier
-                }
+                // If no verifier is configured the key cannot be checked against known
+                // hosts - warn the user and let them decide instead of trusting blindly
+                final HostKeyVerifier verifier =
+                        hostKeyVerifier != null ? hostKeyVerifier : SSHConnection.this::confirmUnverifiedHostKey;
 
                 String keyType = getKeyType(serverKey);
                 String fingerprint = getFingerprint(serverKey);
 
                 // Must run on EDT for Swing dialogs
                 if (javax.swing.SwingUtilities.isEventDispatchThread()) {
-                    return hostKeyVerifier.verify(host, port, keyType, fingerprint, serverKey);
+                    return verifier.verify(host, port, keyType, fingerprint, serverKey);
                 } else {
                     final java.util.concurrent.atomic.AtomicBoolean result =
                             new java.util.concurrent.atomic.AtomicBoolean(false);
                     try {
                         javax.swing.SwingUtilities.invokeAndWait(() -> {
-                            result.set(hostKeyVerifier.verify(host, port, keyType, fingerprint, serverKey));
+                            result.set(verifier.verify(host, port, keyType, fingerprint, serverKey));
                         });
                     } catch (Exception e) {
                         return false;
@@ -120,6 +122,26 @@ public class SSHConnection {
         this.hostKeyVerifier = verifier;
     }
 
+    /**
+     * Fallback used when no HostKeyVerifier was configured: the key cannot be
+     * checked against known hosts, so warn the user and ask before accepting.
+     */
+    private boolean confirmUnverifiedHostKey(String host, int port, String keyType, String fingerprint, PublicKey key) {
+        int result = javax.swing.JOptionPane.showConfirmDialog(null,
+                "WARNING: The host key cannot be verified\n" +
+                        "(no host key verifier is configured).\n\n" +
+                        "Host: " + host + (port != JSSHConst.DEFAULT_SSH_PORT ? ":" + port : "") + "\n" +
+                        "Key type: " + keyType + "\n" +
+                        "Fingerprint: " + fingerprint + "\n\n" +
+                        "If this is not the server you expect, someone could be\n" +
+                        "intercepting the connection.\n\n" +
+                        "Accept this key and continue?",
+                "Unverified Host Key",
+                javax.swing.JOptionPane.YES_NO_OPTION,
+                javax.swing.JOptionPane.WARNING_MESSAGE);
+        return result == javax.swing.JOptionPane.YES_OPTION;
+    }
+
     public void setConnectionListener(ConnectionListener listener) {
         this.listener = listener;
     }
@@ -133,8 +155,9 @@ public class SSHConnection {
 
         ConnectFuture connectFuture = client.connect(null, host, port);
 
-        // Use longer timeout for connect since host key verification may require user interaction
-        if (!connectFuture.await(timeoutMs + 60000, TimeUnit.MILLISECONDS)) {
+        // Honor the caller's timeout. Note this window also covers the host-key
+        // verification dialog, so callers should pass a value that allows for it.
+        if (!connectFuture.await(timeoutMs, TimeUnit.MILLISECONDS)) {
             throw new IOException("Connection timeout");
         }
 
@@ -158,20 +181,15 @@ public class SSHConnection {
             @Override
             public void sessionDisconnect(Session session, int reason, String msg, String language, boolean initiator) {
                 connected = false;
-                if (listener != null) {
-                    String disconnectReason = initiator ? "Disconnected by client" :
-                            "Disconnected by server: " + (msg != null ? msg : "reason code " + reason);
-                    listener.onDisconnected(disconnectReason);
-                }
+                String disconnectReason = initiator ? "Disconnected by client" :
+                        "Disconnected by server: " + (msg != null ? msg : "reason code " + reason);
+                notifyDisconnected(disconnectReason);
             }
 
             @Override
             public void sessionClosed(Session session) {
-                boolean wasConnected = connected;
                 connected = false;
-                if (listener != null && wasConnected) {
-                    listener.onDisconnected("Session closed unexpectedly");
-                }
+                notifyDisconnected("Session closed");
             }
 
             @Override
@@ -191,6 +209,15 @@ public class SSHConnection {
     }
 
     /**
+     * Deliver onDisconnected to the listener at most once for this connection.
+     */
+    private void notifyDisconnected(String reason) {
+        if (disconnectNotified.compareAndSet(false, true) && listener != null) {
+            listener.onDisconnected(reason);
+        }
+    }
+
+    /**
      * Authenticate with password
      */
     public boolean authenticatePassword(String username, String password, long timeoutMs) throws IOException {
@@ -199,6 +226,24 @@ public class SSHConnection {
         session.addPasswordIdentity(password);
 
         return authenticate(timeoutMs);
+    }
+
+    /**
+     * Authenticate with password held in a char[] so the caller can wipe it;
+     * the String required by the MINA API only exists transiently here
+     */
+    public boolean authenticatePassword(String username, char[] password, long timeoutMs) throws IOException {
+        return authenticatePassword(username, password != null ? new String(password) : null, timeoutMs);
+    }
+
+    /**
+     * Authenticate with public key, passphrase held in a char[] so the caller can
+     * wipe it; an empty or null array means the key is not encrypted
+     */
+    public boolean authenticatePublicKey(String username, String keyFile, char[] passphrase, long timeoutMs)
+            throws IOException {
+        return authenticatePublicKey(username, keyFile,
+                (passphrase == null || passphrase.length == 0) ? null : new String(passphrase), timeoutMs);
     }
 
     /**
@@ -229,11 +274,35 @@ public class SSHConnection {
     }
 
     private KeyPair loadKeyPair(String keyFile, String passphrase) throws IOException {
-        Path path = Paths.get(keyFile.replace("~", System.getProperty("user.home")));
+        Path path = Paths.get(expandHome(keyFile));
 
         if (!Files.exists(path)) {
             throw new IOException("Key file not found: " + keyFile);
         }
+
+        return loadKeyPairFromPath(path, passphrase);
+    }
+
+    /**
+     * Expand a leading "~/" (or a bare "~") to the user's home directory.
+     * Only the leading element is expanded, so paths that legitimately contain
+     * '~' elsewhere (e.g. "backup~1") are left untouched.
+     */
+    private static String expandHome(String path) {
+        if (path == null) {
+            return null;
+        }
+        String home = System.getProperty("user.home");
+        if (path.equals("~")) {
+            return home;
+        }
+        if (path.startsWith("~/") || path.startsWith("~\\")) {
+            return home + path.substring(1);
+        }
+        return path;
+    }
+
+    private KeyPair loadKeyPairFromPath(Path path, String passphrase) throws IOException {
 
         try {
             org.apache.sshd.common.config.keys.FilePasswordProvider passwordProvider =
@@ -279,7 +348,29 @@ public class SSHConnection {
      */
     public ChannelShell openShell(String termType, int cols, int rows,
                                   boolean x11Forwarding, String x11Host, int x11Display) throws IOException {
-        shellChannel = session.createShellChannel();
+        // Prepare X11 forwarding (register the local acceptor) before opening.
+        String x11CookieHex = null;
+        int x11Screen = 0;
+        if (x11Forwarding) {
+            byte[] fakeCookie = setupX11Forwarding(x11Host, x11Display);
+            if (fakeCookie != null) {
+                x11CookieHex = toHex(fakeCookie);
+            }
+        }
+
+        if (x11CookieHex != null) {
+            // Use a shell channel that sends x11-req *before* the shell request,
+            // so the server sets $DISPLAY in the shell's environment
+            io.xlogistx.jssh.ssh.x11.X11ChannelShell x11Shell =
+                    new io.xlogistx.jssh.ssh.x11.X11ChannelShell(null, java.util.Collections.emptyMap(),
+                            x11CookieHex, x11Screen);
+            session.getService(org.apache.sshd.common.session.ConnectionService.class)
+                    .registerChannel(x11Shell);
+            shellChannel = x11Shell;
+        } else {
+            shellChannel = session.createShellChannel();
+        }
+
         shellChannel.setPtyType(termType);
         shellChannel.setPtyColumns(cols);
         shellChannel.setPtyLines(rows);
@@ -290,86 +381,68 @@ public class SSHConnection {
 //        shellChannel.setEnv("LANG", "en_US.UTF-8");
 //        shellChannel.setEnv("LC_ALL", "en_US.UTF-8");
 
-        // Configure X11 forwarding if requested
-        if (x11Forwarding) {
-            configureX11Forwarding(shellChannel, x11Host, x11Display);
-        }
-
         shellChannel.open().verify(JSSHConst.SHELL_OPEN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         return shellChannel;
     }
 
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
     /**
-     * Configure X11 forwarding for a channel
+     * Register the client-side X11 acceptor and compute the auth cookie.
+     * Returns the fake cookie advertised to the server (16 random bytes), or
+     * {@code null} if forwarding could not be prepared.
+     *
+     * <p>Flow: the client tells the server (via {@code x11-req}) to forward X11
+     * connections. When a GUI program on the server connects to its forwarded
+     * display, the server opens an "x11" channel back to us, which
+     * {@link io.xlogistx.jssh.ssh.x11.X11ChannelFactory} accepts and bridges to
+     * the local X server.
      */
-    private void configureX11Forwarding(ChannelShell channel, String x11Host, int x11Display) {
-        // Generate random auth cookie
-        byte[] cookie = new byte[16];
-        new java.security.SecureRandom().nextBytes(cookie);
-        StringBuilder cookieHex = new StringBuilder();
-        for (byte b : cookie) {
-            cookieHex.append(String.format("%02x", b));
-        }
-
-        // Determine X11 display host
-        String displayHost = x11Host;
-        if (displayHost == null || displayHost.isEmpty()) {
-            // Try to get from DISPLAY environment variable
-            String display = System.getenv("DISPLAY");
-            if (display != null && !display.isEmpty()) {
-                // Parse DISPLAY (format: [host]:display[.screen])
-                int colonIdx = display.lastIndexOf(':');
-                if (colonIdx >= 0) {
-                    displayHost = colonIdx > 0 ? display.substring(0, colonIdx) : "localhost";
-                    try {
-                        String dispNum = display.substring(colonIdx + 1);
-                        int dotIdx = dispNum.indexOf('.');
-                        if (dotIdx > 0) {
-                            dispNum = dispNum.substring(0, dotIdx);
-                        }
-                        x11Display = Integer.parseInt(dispNum);
-                    } catch (NumberFormatException e) {
-                        x11Display = 0;
-                    }
-                }
-            } else {
-                displayHost = "localhost";
-            }
-        }
-
-        // Set X11 forwarding parameters
-        // Note: The actual X11 forwarding implementation depends on MINA SSHD version
-        // This sets up the channel to request X11 forwarding from the server
+    private byte[] setupX11Forwarding(String x11Host, int displayNumber) {
         try {
-            // Request X11 forwarding
-            // The channel will forward X11 connections back to the local display
-            java.util.Map<String, Object> env = new java.util.HashMap<>();
-            env.put("DISPLAY", displayHost + ":" + x11Display);
+            // Where the local X server listens: host:(6000+display). A remote/unix
+            // host maps to loopback since forwarding targets the local display.
+            String host = (x11Host == null || x11Host.isEmpty()
+                    || "unix".equalsIgnoreCase(x11Host) || "localhost".equalsIgnoreCase(x11Host))
+                    ? "127.0.0.1" : x11Host;
+            int port = JSSHConst.X_SERVER_PORT + displayNumber;
+            java.net.InetSocketAddress xServer = new java.net.InetSocketAddress(host, port);
 
-            // MINA SSHD handles X11 forwarding through the session
-            // We need to set up an X11 forwarder
-            final String fDisplayHost = displayHost;
-            final int fX11Display = x11Display;
-            final String fCookieHex = cookieHex.toString();
+            byte[] fakeCookie = new byte[16];
+            new java.security.SecureRandom().nextBytes(fakeCookie);
+            byte[] realCookie = io.xlogistx.jssh.ssh.x11.XAuthority.findMagicCookie(displayNumber);
 
-            session.addChannelListener(new org.apache.sshd.common.channel.ChannelListener() {
-                @Override
-                public void channelOpenSuccess(org.apache.sshd.common.channel.Channel channel) {
-                    // X11 channel opened successfully
-                }
+            io.xlogistx.jssh.ssh.x11.X11ChannelFactory factory =
+                    new io.xlogistx.jssh.ssh.x11.X11ChannelFactory(
+                            xServer, JSSHConst.X11_SOCKET_TIMEOUT_MS * 10, fakeCookie, realCookie);
+            registerChannelFactory(factory);
 
-                @Override
-                public void channelOpenFailure(org.apache.sshd.common.channel.Channel channel, Throwable reason) {
-                    // X11 channel failed to open
-                }
-            });
-
+            return fakeCookie;
         } catch (Exception e) {
-            // X11 forwarding setup failed, continue without it
             System.err.println("X11 forwarding setup failed: " + e.getMessage());
+            return null;
         }
     }
+
+    /**
+     * Add a channel factory to the client, replacing any existing one of the
+     * same name (so incoming channels of that type are accepted).
+     */
+    private void registerChannelFactory(org.apache.sshd.common.channel.ChannelFactory factory) {
+        java.util.List<org.apache.sshd.common.channel.ChannelFactory> factories =
+                new java.util.ArrayList<>(client.getChannelFactories());
+        factories.removeIf(f -> factory.getName().equals(f.getName()));
+        factories.add(factory);
+        client.setChannelFactories(factories);
+    }
+
 
     /**
      * Check if X11 forwarding is available on this system
@@ -394,32 +467,6 @@ public class SSHConnection {
     }
 
     /**
-     * Execute command
-     */
-    public String executeCommand(String command, long timeoutMs) throws IOException {
-        ChannelExec channel = session.createExecChannel(command);
-
-        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
-        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
-
-        channel.setOut(stdout);
-        channel.setErr(stderr);
-
-        channel.open().verify(JSSHConst.EXEC_CHANNEL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-        channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), timeoutMs);
-
-        channel.close();
-
-        String error = stderr.toString();
-        if (!error.isEmpty()) {
-            throw new IOException(error);
-        }
-
-        return stdout.toString();
-    }
-
-    /**
      * Open SFTP client
      */
     public SftpClient openSftp() throws IOException {
@@ -438,10 +485,13 @@ public class SSHConnection {
 
     /**
      * Create remote port forward
+     * @param allowExternal bind the server-side port to all interfaces (0.0.0.0) so other
+     *                      machines can connect (requires GatewayPorts on the server);
+     *                      otherwise bind loopback so only the server itself can connect
      */
-    public void createRemotePortForward(int remotePort, String localHost, int localPort) throws IOException {
+    public void createRemotePortForward(int remotePort, String localHost, int localPort, boolean allowExternal) throws IOException {
         session.startRemotePortForwarding(
-                new SshdSocketAddress("0.0.0.0", remotePort),
+                new SshdSocketAddress(allowExternal ? "0.0.0.0" : "127.0.0.1", remotePort),
                 new SshdSocketAddress(localHost, localPort)
         );
     }
@@ -459,6 +509,9 @@ public class SSHConnection {
      * Disconnect
      */
     public void disconnect() {
+        // Only announce a disconnect if we were actually connected; a failed
+        // connect attempt that calls close() should stay silent
+        boolean wasConnected = connected;
         connected = false;
 
         try {
@@ -475,8 +528,8 @@ public class SSHConnection {
         } catch (IOException e) {
         }
 
-        if (listener != null) {
-            listener.onDisconnected("Disconnected");
+        if (wasConnected) {
+            notifyDisconnected("Disconnected");
         }
     }
 
@@ -539,9 +592,9 @@ public class SSHConnection {
 
     private String getFingerprint(PublicKey key) {
         try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
-            byte[] digest = md.digest(key.getEncoded());
-            return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest).replace("=", "");
+            // SHA-256 over the SSH wire encoding of the key (not the X.509 encoding),
+            // so the result matches `ssh-keygen -lf` and can be verified out-of-band
+            return org.apache.sshd.common.config.keys.KeyUtils.getFingerPrint(key);
         } catch (Exception e) {
             return "unknown";
         }
@@ -552,23 +605,28 @@ public class SSHConnection {
         tunnels.add(tunnel);
     }
 
-    public void removeTunnel(int index) throws IOException {
-        if (index >= 0 && index < tunnels.size()) {
-            TunnelInfo tunnel = tunnels.get(index);
-
-            // Actually stop the port forwarding in the SSH session
-            if ("Local".equals(tunnel.getType())) {
-                session.stopLocalPortForwarding(
-                    new SshdSocketAddress("127.0.0.1", tunnel.getLocalPort())
-                );
-            } else {
-                session.stopRemotePortForwarding(
-                    new SshdSocketAddress("0.0.0.0", tunnel.getRemotePort())
-                );
-            }
-
-            tunnels.remove(index);
+    /**
+     * Stop and remove a specific tunnel. Removing by identity (rather than by
+     * table row index) keeps things consistent when more than one tunnel dialog
+     * is open on the same connection.
+     */
+    public void removeTunnel(TunnelInfo tunnel) throws IOException {
+        if (tunnel == null || !tunnels.contains(tunnel)) {
+            return; // Already removed (e.g. by another dialog) - nothing to do
         }
+
+        // Actually stop the port forwarding in the SSH session
+        if ("Local".equals(tunnel.getType())) {
+            session.stopLocalPortForwarding(
+                new SshdSocketAddress("127.0.0.1", tunnel.getLocalPort())
+            );
+        } else {
+            session.stopRemotePortForwarding(
+                new SshdSocketAddress(tunnel.getBindAddress(), tunnel.getRemotePort())
+            );
+        }
+
+        tunnels.remove(tunnel);
     }
 
     public List<TunnelInfo> getTunnels() {
@@ -583,17 +641,26 @@ public class SSHConnection {
         private final int localPort;
         private final String remoteHost;
         private final int remotePort;
+        private final String bindAddress;
 
         public TunnelInfo(String type, int localPort, String remoteHost, int remotePort) {
+            this(type, localPort, remoteHost, remotePort, "127.0.0.1");
+        }
+
+        public TunnelInfo(String type, int localPort, String remoteHost, int remotePort, String bindAddress) {
             this.type = type;
             this.localPort = localPort;
             this.remoteHost = remoteHost;
             this.remotePort = remotePort;
+            this.bindAddress = bindAddress;
         }
 
         public String getType() { return type; }
         public int getLocalPort() { return localPort; }
         public String getRemoteHost() { return remoteHost; }
         public int getRemotePort() { return remotePort; }
+        public String getBindAddress() { return bindAddress; }
+
+        public boolean isExternal() { return "0.0.0.0".equals(bindAddress); }
     }
 }

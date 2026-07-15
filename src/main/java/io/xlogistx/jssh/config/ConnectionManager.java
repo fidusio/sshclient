@@ -105,23 +105,6 @@ public class ConnectionManager {
     }
 
     /**
-     * Rename a connection
-     */
-    public void rename(String oldName, String newName) throws IOException {
-        ConnectionConfig config = connections.get(oldName);
-        if (config == null) {
-            throw new IOException("Connection not found: " + oldName);
-        }
-
-        // Delete old file
-        delete(oldName);
-
-        // Save with new name
-        config.setName(newName);
-        save(config);
-    }
-
-    /**
      * Get a connection by name
      */
     public ConnectionConfig get(String name) {
@@ -157,35 +140,14 @@ public class ConnectionManager {
     }
 
     /**
-     * Sanitize name for use as filename
+     * Sanitize name for use as filename. A hash of the full original name is
+     * appended so that distinct names which sanitize to the same characters
+     * (e.g. "a/b" and "a_b", or "user@host" and "user_host") never collide on
+     * the same file.
      */
     private String sanitizeFileName(String name) {
-        return name.replaceAll("[^a-zA-Z0-9._-]", "_");
-    }
-
-    /**
-     * Import a connection from a file
-     */
-    public ConnectionConfig importConnection(Path file) throws IOException {
-        ConnectionConfig config = load(file);
-        if (config != null) {
-            save(config);
-        }
-        return config;
-    }
-
-    /**
-     * Export a connection to a file
-     */
-    public void exportConnection(String name, Path file) throws IOException {
-        ConnectionConfig config = connections.get(name);
-        if (config == null) {
-            throw new IOException("Connection not found: " + name);
-        }
-
-        Properties props = config.toProperties();
-        try (Writer writer = Files.newBufferedWriter(file)) {
-            props.store(writer, "JSSH Connection: " + name);
-        }
+        String base = name.replaceAll("[^a-zA-Z0-9._-]", "_");
+        String hash = Integer.toHexString(name.hashCode());
+        return base + "-" + hash;
     }
 }

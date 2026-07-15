@@ -259,8 +259,8 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                     utf8Char = (utf8Char << 6) | (b & 0x3F);
                     utf8Remaining--;
                     if (utf8Remaining == 0) {
-                        // Complete character
-                        processChar((char) utf8Char);
+                        // Complete character - may be outside the BMP
+                        processCodePoint(utf8Char);
                     }
                 } else {
                     // Invalid continuation, reset and process as new byte
@@ -301,6 +301,20 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         repaint();
     }
     
+    /**
+     * Process a full Unicode code point. Code points outside the BMP are stored
+     * as a surrogate pair (two cells) so they are not truncated to garbage.
+     */
+    private void processCodePoint(int cp) {
+        if (inEscape || cp <= 0xFFFF) {
+            processChar((char) cp);
+        } else {
+            for (char c : Character.toChars(cp)) {
+                processChar(c);
+            }
+        }
+    }
+
     private void processChar(char c) {
         if (inEscape) {
             processEscape(c);
@@ -1406,6 +1420,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         scrollbackColors.clear();
         scrollbackBgColors.clear();
         scrollbackBold.clear();
+        scrollbackReverse.clear();
         scrollOffset = 0;
         repaint();
     }
@@ -1514,42 +1529,33 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     
     public void resize(int newCols, int newRows) {
         if (newCols == cols && newRows == rows) return;
-        
-        char[][] newScreen = new char[newRows][newCols];
-        int[][] newColors = new int[newRows][newCols];
-        int[][] newBgColors = new int[newRows][newCols];
-        boolean[][] newBold = new boolean[newRows][newCols];
-        boolean[][] newReverse = new boolean[newRows][newCols];
-        
-        for (int y = 0; y < newRows; y++) {
-            Arrays.fill(newScreen[y], ' ');
-            Arrays.fill(newColors[y], 7);
-            Arrays.fill(newBgColors[y], 0);
+
+        screen = resizeCharBuffer(screen, newRows, newCols);
+        colors = resizeIntBuffer(colors, newRows, newCols, 7);
+        bgColors = resizeIntBuffer(bgColors, newRows, newCols, 0);
+        bold = resizeBoolBuffer(bold, newRows, newCols);
+        reverse = resizeBoolBuffer(reverse, newRows, newCols);
+
+        // Keep the saved (inactive) screen buffer in sync, otherwise restoring
+        // it after leaving the alternate screen indexes with the new rows/cols
+        // into arrays that still have the old dimensions
+        if (savedScreen != null) {
+            savedScreen = resizeCharBuffer(savedScreen, newRows, newCols);
+            savedColors = resizeIntBuffer(savedColors, newRows, newCols, 7);
+            savedBgColors = resizeIntBuffer(savedBgColors, newRows, newCols, 0);
+            savedBold = resizeBoolBuffer(savedBold, newRows, newCols);
+            savedReverse = resizeBoolBuffer(savedReverse, newRows, newCols);
         }
-        
-        int copyRows = Math.min(rows, newRows);
-        int copyCols = Math.min(cols, newCols);
-        
-        for (int y = 0; y < copyRows; y++) {
-            System.arraycopy(screen[y], 0, newScreen[y], 0, copyCols);
-            System.arraycopy(colors[y], 0, newColors[y], 0, copyCols);
-            System.arraycopy(bgColors[y], 0, newBgColors[y], 0, copyCols);
-            System.arraycopy(bold[y], 0, newBold[y], 0, copyCols);
-            System.arraycopy(reverse[y], 0, newReverse[y], 0, copyCols);
-        }
-        
-        screen = newScreen;
-        colors = newColors;
-        bgColors = newBgColors;
-        bold = newBold;
-        reverse = newReverse;
-        
+
         cols = newCols;
         rows = newRows;
+        scrollTop = Math.min(scrollTop, rows - 1);
         scrollBottom = rows - 1;
-        
+
         cursorX = Math.min(cursorX, cols - 1);
         cursorY = Math.min(cursorY, rows - 1);
+        savedCursorX = Math.min(savedCursorX, cols - 1);
+        savedCursorY = Math.min(savedCursorY, rows - 1);
         
         setPreferredSize(new Dimension(cols * charWidth, rows * charHeight));
         
@@ -1560,6 +1566,39 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         repaint();
     }
     
+    private char[][] resizeCharBuffer(char[][] src, int newRows, int newCols) {
+        char[][] dst = new char[newRows][newCols];
+        for (int y = 0; y < newRows; y++) {
+            Arrays.fill(dst[y], ' ');
+        }
+        int copyRows = Math.min(src.length, newRows);
+        for (int y = 0; y < copyRows; y++) {
+            System.arraycopy(src[y], 0, dst[y], 0, Math.min(src[y].length, newCols));
+        }
+        return dst;
+    }
+
+    private int[][] resizeIntBuffer(int[][] src, int newRows, int newCols, int fill) {
+        int[][] dst = new int[newRows][newCols];
+        for (int y = 0; y < newRows; y++) {
+            Arrays.fill(dst[y], fill);
+        }
+        int copyRows = Math.min(src.length, newRows);
+        for (int y = 0; y < copyRows; y++) {
+            System.arraycopy(src[y], 0, dst[y], 0, Math.min(src[y].length, newCols));
+        }
+        return dst;
+    }
+
+    private boolean[][] resizeBoolBuffer(boolean[][] src, int newRows, int newCols) {
+        boolean[][] dst = new boolean[newRows][newCols];
+        int copyRows = Math.min(src.length, newRows);
+        for (int y = 0; y < copyRows; y++) {
+            System.arraycopy(src[y], 0, dst[y], 0, Math.min(src[y].length, newCols));
+        }
+        return dst;
+    }
+
     public int getCols() { return cols; }
     public int getRows() { return rows; }
     public int getCharWidth() { return charWidth; }

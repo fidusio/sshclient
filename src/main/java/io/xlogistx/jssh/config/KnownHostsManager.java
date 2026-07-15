@@ -2,7 +2,6 @@ package io.xlogistx.jssh.config;
 
 import java.io.*;
 import java.nio.file.*;
-import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.util.*;
 
@@ -79,7 +78,7 @@ public class KnownHostsManager {
     /**
      * Check if a host key is known and matches
      */
-    public VerifyResult verify(String host, int port, String fingerprint) {
+    public VerifyResult verify(String host, int port, String fingerprint, PublicKey key) {
         String hostKey = makeHostKey(host, port);
         HostEntry entry = knownHosts.get(hostKey);
 
@@ -88,6 +87,16 @@ public class KnownHostsManager {
         }
 
         if (entry.getFingerprint().equals(fingerprint)) {
+            return VerifyResult.KNOWN_OK;
+        }
+
+        // The stored fingerprint may come from the old scheme (hash of the X.509
+        // encoding instead of the SSH wire encoding). The raw key bytes are stored
+        // too - if they match, it is the same key: migrate the entry to the new
+        // fingerprint silently instead of raising a false "key changed" alarm.
+        if (key != null && entry.getEncodedKey() != null && !entry.getEncodedKey().isEmpty()
+                && entry.getEncodedKey().equals(Base64.getEncoder().encodeToString(key.getEncoded()))) {
+            addHost(host, port, entry.getKeyType(), fingerprint, key);
             return VerifyResult.KNOWN_OK;
         }
 
@@ -196,13 +205,12 @@ public class KnownHostsManager {
     }
 
     /**
-     * Calculate fingerprint from public key (SHA-256)
+     * Calculate OpenSSH-style fingerprint from public key (SHA-256 over the
+     * SSH wire encoding, matching `ssh-keygen -lf`)
      */
     public static String calculateFingerprint(PublicKey key) {
         try {
-            MessageDigest md = MessageDigest.getInstance(JSSHConst.FINGERPRINT_ALGORITHM);
-            byte[] digest = md.digest(key.getEncoded());
-            return JSSHConst.FINGERPRINT_PREFIX + Base64.getEncoder().encodeToString(digest).replace("=", "");
+            return org.apache.sshd.common.config.keys.KeyUtils.getFingerPrint(key);
         } catch (Exception e) {
             return "unknown";
         }

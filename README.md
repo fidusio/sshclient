@@ -24,22 +24,29 @@ A modern GUI SSH client written in Java using Apache MINA SSHD.
 
 - **Port Forwarding**
   - Local port forwarding (tunnel to remote)
-  - Remote port forwarding (tunnel from remote)
+  - Remote port forwarding (tunnel from remote) — binds loopback by default, with
+    an opt-in "Allow external connections" (0.0.0.0) checkbox
+
+- **X11 Forwarding**
+  - Forward remote GUI applications to a local X server
+  - Client-side implementation over Apache MINA SSHD (accepts the server's `x11`
+    channels and bridges to the local display) with MIT-MAGIC-COOKIE-1 handling
 
 - **Key Management**
-  - Generate Ed25519, ECDSA, RSA keys
+  - Generate Ed25519, ECDSA, RSA keys (via `ssh-keygen`)
   - Import/export keys
-  - View key fingerprints
+  - View key fingerprints (OpenSSH SHA-256 format, matches `ssh-keygen -lf`)
 
 - **Session Management**
-  - Multiple tabbed sessions
+  - Multiple tabbed sessions, detach to separate window, clone session
   - Quick connect
-  - Host key verification
+  - Host key verification with a known-hosts store (`~/.jssh/known_hosts`)
 
 ## Requirements
 
-- Java 8+
-- Maven 3.6+ (for building)
+- Java 8+ to run the application (the code is compiled with `--release 8`)
+- Maven 3.6+ to build
+- Java 17+ only if you want to run the unit tests (they use JUnit 5)
 
 ## Building
 
@@ -48,6 +55,23 @@ mvn clean package
 ```
 
 This creates `target/jssh.jar` with all dependencies included.
+
+The Maven compiler is pinned to Java 8 via `<release>8</release>` (inherited
+`${jdk.version}` from the parent POM), so any accidental use of a post-8 API is a
+hard compile error.
+
+## Testing
+
+Unit tests (JUnit 5) cover the terminal escape parser, connection-config
+round-tripping, and the X11 cookie/Xauthority logic:
+
+```bash
+mvn test
+```
+
+The parent POM skips tests globally; this module re-enables them via
+`<skipTests>false</skipTests>`. Running the tests requires Java 17+ (JUnit 5),
+even though the application itself targets Java 8.
 
 ## Running
 
@@ -92,6 +116,25 @@ java -jar jssh.jar user@hostname:2222
 2. Click **Tools → Port Tunnels**
 3. Add local or remote port forward
 4. Specify local and remote ports
+5. For remote forwards, tick **Allow external connections** only if you want the
+   server-side port exposed on all interfaces (needs `GatewayPorts yes` on the
+   server); otherwise it binds to loopback
+
+### X11 Forwarding
+
+1. Start a local X server:
+   - **Windows:** VcXsrv or Xming (XLaunch → "Multiple windows" → "Start no
+     client"). If you leave X server authentication enabled, X11 uses the cookie
+     from `~/.Xauthority` / `$XAUTHORITY`; otherwise check "Disable access control".
+   - **Linux:** already running (`$DISPLAY` is set)
+   - **macOS:** XQuartz
+2. Open **File → Connect** (not Quick Connect) → **Terminal** tab
+3. Check **Enable X11 Forwarding** (display defaults to `localhost:0`)
+4. Connect, then run a GUI program on the server (e.g. `xeyes`, `xclock`); the
+   server must have `X11Forwarding yes` in `sshd_config`
+
+X11 forwarding is not propagated to cloned sessions, and can only be enabled at
+connect time (not after a session is already open).
 
 ### Key Management
 
@@ -105,10 +148,11 @@ java -jar jssh.jar user@hostname:2222
 |--------------|---------------------------|
 | Ctrl+N       | New connection            |
 | Ctrl+W       | Close tab                 |
+| Ctrl+Shift+D | Detach tab to window      |
+| Ctrl+Shift+C | Clone session / Copy in terminal |
 | Ctrl+Q       | Exit                      |
-| Ctrl+C       | Copy (when text selected) |
+| Ctrl+C       | Copy (when text selected) / interrupt |
 | Ctrl+V       | Paste                     |
-| Ctrl+Shift+C | Copy in terminal          |
 | Ctrl+Shift+V | Paste in terminal         |
 
 ## Terminal Escape Sequences
@@ -125,8 +169,10 @@ Supported:
 
 ## Configuration Files
 
-- `~/.ssh/known_hosts` - Known host keys
-- `~/.ssh/id_*` - SSH key files
+- `~/.jssh/connections/*.properties` - Saved connection profiles
+- `~/.jssh/known_hosts` - Known host keys (JSSH format, stores fingerprint + key)
+- `~/.ssh/id_*` - SSH key files (used for public-key authentication and the Key Manager)
+- `~/.Xauthority` / `$XAUTHORITY` - X11 cookie source when X11 forwarding is used
 
 ## Troubleshooting
 

@@ -21,10 +21,6 @@ public class ConnectionConfig implements Serializable {
     private boolean x11Forwarding = false;
     private String x11Display = JSSHConst.DEFAULT_X11_DISPLAY;
 
-    // Tunnel configurations (stored as comma-separated strings)
-    private String localTunnels = "";   // Format: "localPort:remoteHost:remotePort,..."
-    private String remoteTunnels = "";  // Format: "remotePort:localHost:localPort,..."
-
     public ConnectionConfig() {
     }
 
@@ -121,22 +117,6 @@ public class ConnectionConfig implements Serializable {
         this.x11Display = x11Display;
     }
 
-    public String getLocalTunnels() {
-        return localTunnels;
-    }
-
-    public void setLocalTunnels(String localTunnels) {
-        this.localTunnels = localTunnels;
-    }
-
-    public String getRemoteTunnels() {
-        return remoteTunnels;
-    }
-
-    public void setRemoteTunnels(String remoteTunnels) {
-        this.remoteTunnels = remoteTunnels;
-    }
-
     /**
      * Save to properties format
      */
@@ -153,8 +133,6 @@ public class ConnectionConfig implements Serializable {
         props.setProperty("rows", String.valueOf(rows));
         props.setProperty("x11Forwarding", String.valueOf(x11Forwarding));
         props.setProperty("x11Display", x11Display != null ? x11Display : JSSHConst.DEFAULT_X11_DISPLAY);
-        props.setProperty("localTunnels", localTunnels != null ? localTunnels : "");
-        props.setProperty("remoteTunnels", remoteTunnels != null ? remoteTunnels : "");
         return props;
     }
 
@@ -174,8 +152,6 @@ public class ConnectionConfig implements Serializable {
         config.rows = Integer.parseInt(props.getProperty("rows", String.valueOf(JSSHConst.DEFAULT_TERMINAL_ROWS)));
         config.x11Forwarding = Boolean.parseBoolean(props.getProperty("x11Forwarding", "false"));
         config.x11Display = props.getProperty("x11Display", JSSHConst.DEFAULT_X11_DISPLAY);
-        config.localTunnels = props.getProperty("localTunnels", "");
-        config.remoteTunnels = props.getProperty("remoteTunnels", "");
         return config;
     }
 

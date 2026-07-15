@@ -38,6 +38,10 @@ public class SFTPPanel extends JPanel {
     // Status
     private JLabel statusLabel;
     private JProgressBar progressBar;
+
+    // Invoked after the Close button closed the SFTP client, so an embedding
+    // container (e.g. DetachedSessionFrame) can remove the panel and update its state
+    private Runnable onCloseAction;
     
     public SFTPPanel(SSHConnection connection) throws IOException {
         this.connection = connection;
@@ -98,19 +102,14 @@ public class SFTPPanel extends JPanel {
         // Close button
         JButton closeBtn = new JButton("Close");
         closeBtn.addActionListener(e -> {
-            // Check if embedded in a split pane (e.g., DetachedSessionFrame)
-            Container parent = getParent();
-            if (parent instanceof JSplitPane) {
-                JSplitPane splitPane = (JSplitPane) parent;
-                // Hide this panel by removing from split pane
-                close();
-                splitPane.setBottomComponent(null);
-                splitPane.setDividerSize(0);
+            close();
+            if (onCloseAction != null) {
+                // Embedded (e.g., DetachedSessionFrame) - let the host remove the panel
+                onCloseAction.run();
             } else {
                 // Standalone window - dispose it
                 Window window = SwingUtilities.getWindowAncestor(this);
                 if (window != null) {
-                    close();
                     window.dispose();
                 }
             }
@@ -770,7 +769,8 @@ public class SFTPPanel extends JPanel {
     }
     
     private void deleteRecursive(File file) {
-        if (file.isDirectory()) {
+        // Never recurse through a symlink - deleting the link must not touch its target
+        if (file.isDirectory() && !java.nio.file.Files.isSymbolicLink(file.toPath())) {
             File[] children = file.listFiles();
             if (children != null) {
                 for (File child : children) {
@@ -858,8 +858,12 @@ public class SFTPPanel extends JPanel {
     }
     
     private void deleteRemoteRecursive(String path) throws IOException {
-        Attributes attrs = sftpClient.stat(path);
-        if (attrs.isDirectory()) {
+        // Use lstat so a symlink is seen as a link, not as its target;
+        // a symlink (even to a directory) is deleted as the link itself
+        Attributes attrs = sftpClient.lstat(path);
+        if (attrs.isSymbolicLink()) {
+            sftpClient.remove(path);
+        } else if (attrs.isDirectory()) {
             for (DirEntry entry : sftpClient.readDir(path)) {
                 String name = entry.getFilename();
                 if (name.equals(".") || name.equals("..")) continue;
@@ -886,6 +890,10 @@ public class SFTPPanel extends JPanel {
         return String.format("%.1f GB", size / (1024.0 * 1024 * 1024));
     }
     
+    public void setOnClose(Runnable onCloseAction) {
+        this.onCloseAction = onCloseAction;
+    }
+
     public void close() {
         try {
             if (sftpClient != null) {

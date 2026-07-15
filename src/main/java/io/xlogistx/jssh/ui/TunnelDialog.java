@@ -17,6 +17,9 @@ public class TunnelDialog extends JDialog {
     private SSHConnection connection;
     private JTable tunnelTable;
     private DefaultTableModel tableModel;
+    // Row-parallel list of the tunnels shown in the table, so removal targets a
+    // specific tunnel by identity rather than by a row index that can go stale
+    private final java.util.List<TunnelInfo> rowTunnels = new java.util.ArrayList<>();
 
     public TunnelDialog(Frame owner, SSHConnection connection) {
         super(owner, "Port Tunnels", true);
@@ -30,14 +33,20 @@ public class TunnelDialog extends JDialog {
 
     private void loadExistingTunnels() {
         for (TunnelInfo info : connection.getTunnels()) {
-            if ("Local".equals(info.getType())) {
-                tableModel.addRow(new Object[] { "Local →", info.getLocalPort(),
-                    info.getRemoteHost(), info.getRemotePort(), "Active" });
-            } else {
-                tableModel.addRow(new Object[] { "← Remote", info.getRemotePort(),
-                    info.getRemoteHost(), info.getLocalPort(), "Active" });
-            }
+            addTunnelRow(info);
         }
+    }
+
+    private void addTunnelRow(TunnelInfo info) {
+        if ("Local".equals(info.getType())) {
+            tableModel.addRow(new Object[] { "Local →", info.getLocalPort(),
+                info.getRemoteHost(), info.getRemotePort(), "Active" });
+        } else {
+            tableModel.addRow(new Object[] { "← Remote", info.getRemotePort(),
+                info.getRemoteHost(), info.getLocalPort(),
+                info.isExternal() ? "Active (external)" : "Active" });
+        }
+        rowTunnels.add(info);
     }
     
     private void initUI() {
@@ -103,6 +112,9 @@ public class TunnelDialog extends JDialog {
         JSpinner localPort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_LOCAL_TUNNEL_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
         JTextField remoteHost = new JTextField(JSSHConst.DEFAULT_TUNNEL_HOST);
         JSpinner remotePort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TARGET_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
+        // Ports are not amounts - no digit grouping (8080, not 8,080)
+        localPort.setEditor(new JSpinner.NumberEditor(localPort, "#"));
+        remotePort.setEditor(new JSpinner.NumberEditor(remotePort, "#"));
 
         inputPanel.add(new JLabel("Local Port (listen on):"));
         inputPanel.add(localPort);
@@ -134,7 +146,7 @@ public class TunnelDialog extends JDialog {
 
                 TunnelInfo info = new TunnelInfo("Local", lp, rh, rp);
                 connection.addTunnel(info);
-                tableModel.addRow(new Object[] { "Local →", lp, rh, rp, "Active" });
+                addTunnelRow(info);
 
                 JOptionPane.showMessageDialog(this,
                     "Tunnel created. Connect to localhost:" + lp + " to reach " + rh + ":" + rp + "\n\n" +
@@ -165,7 +177,7 @@ public class TunnelDialog extends JDialog {
             "Remote Port Forward: Listens on the SSH server and forwards\n" +
             "connections back to your local machine.\n\n" +
             "Example: Remote 9000 → localhost:3000\n" +
-            "Others can access your localhost:3000 via server:9000");
+            "By default only the server itself can connect to the forwarded port.");
         helpText.setEditable(false);
         helpText.setBackground(panel.getBackground());
         helpText.setFont(helpText.getFont().deriveFont(Font.PLAIN, 11f));
@@ -177,6 +189,9 @@ public class TunnelDialog extends JDialog {
         JSpinner remotePort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_REMOTE_TUNNEL_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
         JTextField localHost = new JTextField(JSSHConst.DEFAULT_TUNNEL_HOST);
         JSpinner localPort = new JSpinner(new SpinnerNumberModel(JSSHConst.DEFAULT_TARGET_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT, 1));
+        // Ports are not amounts - no digit grouping (8080, not 8,080)
+        remotePort.setEditor(new JSpinner.NumberEditor(remotePort, "#"));
+        localPort.setEditor(new JSpinner.NumberEditor(localPort, "#"));
 
         inputPanel.add(new JLabel("Remote Port (listen on server):"));
         inputPanel.add(remotePort);
@@ -186,6 +201,12 @@ public class TunnelDialog extends JDialog {
         inputPanel.add(localPort);
 
         panel.add(inputPanel, BorderLayout.CENTER);
+
+        JCheckBox externalCheckbox = new JCheckBox("Allow external connections (bind 0.0.0.0)");
+        externalCheckbox.setToolTipText(
+            "Expose the forwarded port to other machines that can reach the server. " +
+            "Requires 'GatewayPorts yes' in the server's sshd_config.");
+        panel.add(externalCheckbox, BorderLayout.SOUTH);
 
         int result = JOptionPane.showConfirmDialog(this, panel,
             "Add Remote Port Forward", JOptionPane.OK_CANCEL_OPTION);
@@ -204,18 +225,29 @@ public class TunnelDialog extends JDialog {
                     return;
                 }
 
-                connection.createRemotePortForward(rp, lh, lp);
+                boolean external = externalCheckbox.isSelected();
+                connection.createRemotePortForward(rp, lh, lp, external);
 
-                TunnelInfo info = new TunnelInfo("Remote", lp, lh, rp);
+                TunnelInfo info = new TunnelInfo("Remote", lp, lh, rp, external ? "0.0.0.0" : "127.0.0.1");
                 connection.addTunnel(info);
-                tableModel.addRow(new Object[] { "← Remote", rp, lh, lp, "Active" });
+                addTunnelRow(info);
 
-                JOptionPane.showMessageDialog(this,
-                    "Tunnel created. Connections to server:" + rp + " will reach " + lh + ":" + lp + "\n\n" +
-                    "Note: The server may need 'GatewayPorts yes' in sshd_config\n" +
-                    "for external access.",
-                    "Tunnel Active",
-                    JOptionPane.INFORMATION_MESSAGE);
+                if (external) {
+                    JOptionPane.showMessageDialog(this,
+                        "Tunnel created. Connections to server:" + rp + " will reach " + lh + ":" + lp + "\n\n" +
+                        "The port is bound to all interfaces (0.0.0.0). The server\n" +
+                        "needs 'GatewayPorts yes' in sshd_config for external access.",
+                        "Tunnel Active",
+                        JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(this,
+                        "Tunnel created. Connections to localhost:" + rp + " on the server\n" +
+                        "will reach " + lh + ":" + lp + "\n\n" +
+                        "Only the server itself can connect. Use 'Allow external\n" +
+                        "connections' to expose the port to other machines.",
+                        "Tunnel Active",
+                        JOptionPane.INFORMATION_MESSAGE);
+                }
 
             } catch (IOException e) {
                 String msg = e.getMessage();
@@ -234,10 +266,11 @@ public class TunnelDialog extends JDialog {
     
     private void removeTunnel() {
         int row = tunnelTable.getSelectedRow();
-        if (row >= 0) {
+        if (row >= 0 && row < rowTunnels.size()) {
             try {
-                connection.removeTunnel(row);
+                connection.removeTunnel(rowTunnels.get(row));
                 tableModel.removeRow(row);
+                rowTunnels.remove(row);
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(this,
                     "Failed to remove tunnel: " + e.getMessage(),
