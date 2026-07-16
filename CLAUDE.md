@@ -29,9 +29,10 @@ mvn test                   # run unit tests (JUnit 5)
   `${zoxweb-core.version}`, plugin versions). The project can't build without it
   installed in the local repo.
 - **Offline/CI note:** this environment resolves Maven artifacts from a local
-  repo; network access to Maven Central may be cert-blocked. Prefer `mvn -o`
-  (offline) and expect some plugin providers (e.g. surefire test providers) to be
-  absent offline.
+  repo; network access to Maven Central may be cert-blocked/unavailable. Prefer
+  `mvn -o` (offline) and expect some artifacts to be absent offline (e.g. surefire
+  test providers, and `org.commonmark:commonmark` — see below). A first build that
+  needs a not-yet-cached dependency must run on a networked machine.
 
 ## Layout
 
@@ -40,11 +41,18 @@ mvn test                   # run unit tests (JUnit 5)
 - `ssh/x11/` — client-side X11 forwarding (see below).
 - `terminal/TerminalPanel.java` — VT100/ANSI parser + renderer (Swing). Pure
   logic is unit-testable headless.
-- `ui/` — `MainFrame` (tabs, session lifecycle, detach/clone), `ConnectDialog`,
-  `TunnelDialog`, `KeyManagerDialog`.
+- `ui/` — `MainFrame` (tabs, session lifecycle, detach/clone, Help viewer),
+  `ConnectDialog`, `TunnelDialog`, `KeyManagerDialog`.
 - `sftp/SFTPPanel.java` — dual-pane SFTP browser.
 - `config/` — `JSSHConst` (all constants), `ConnectionConfig`/`ConnectionManager`
   (profiles in `~/.jssh/connections`), `KnownHostsManager` (`~/.jssh/known_hosts`).
+- `resources/how-to.md` — the in-app user guide. **Help → How to Use JSSH**
+  (`MainFrame.showHowTo`) reads it from the classpath, renders Markdown → HTML with
+  `org.commonmark:commonmark`, and shows it in a `JEditorPane` dialog. `JEditorPane`
+  is HTML 3.2 / limited CSS, so keep the guide simple (headings, lists, tables,
+  fenced code all render). commonmark is NOT in the offline repo — a build needs
+  network to fetch it the first time. Bump the `commonmark` version in `pom.xml` if
+  `0.24.0` doesn't resolve.
 
 ## Conventions and gotchas
 

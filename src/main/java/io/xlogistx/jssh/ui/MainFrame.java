@@ -180,6 +180,12 @@ public class MainFrame extends JFrame {
         JMenu helpMenu = new JMenu("Help");
         helpMenu.setMnemonic(KeyEvent.VK_H);
 
+        JMenuItem howToItem = new JMenuItem("How to Use JSSH", KeyEvent.VK_H);
+        howToItem.addActionListener(e -> showHowTo());
+        helpMenu.add(howToItem);
+
+        helpMenu.addSeparator();
+
         JMenuItem aboutItem = new JMenuItem("About", KeyEvent.VK_A);
         aboutItem.addActionListener(e -> showAbout());
         helpMenu.add(aboutItem);
@@ -841,6 +847,57 @@ public class MainFrame extends JFrame {
                         "• Password and public key authentication",
                 "About JSSH",
                 JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /**
+     * Render the bundled how-to.md guide (Markdown → HTML via commonmark) in a
+     * JEditorPane dialog.
+     */
+    private void showHowTo() {
+        String html;
+        try (InputStream is = getClass().getResourceAsStream("/how-to.md")) {
+            if (is == null) {
+                JOptionPane.showMessageDialog(this, "Guide not found (how-to.md missing from classpath)",
+                        "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            String markdown = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            org.commonmark.node.Node document = org.commonmark.parser.Parser.builder().build().parse(markdown);
+            String body = org.commonmark.renderer.html.HtmlRenderer.builder().build().render(document);
+            html = "<html><head><style>"
+                    + "body { font-family: sans-serif; margin: 12px; }"
+                    + "h1 { font-size: 1.6em; } h2 { font-size: 1.3em; } h3 { font-size: 1.1em; }"
+                    + "code, pre { font-family: monospace; background: #f0f0f0; }"
+                    + "pre { padding: 6px; }"
+                    + "table, th, td { border: 1px solid #999; border-collapse: collapse; padding: 3px; }"
+                    + "</style></head><body>" + body + "</body></html>";
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Failed to load guide: " + e.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        JEditorPane editor = new JEditorPane("text/html", html);
+        editor.setEditable(false);
+        editor.setCaretPosition(0);
+        // Open any links in the system browser rather than in the (limited) pane
+        editor.addHyperlinkListener(ev -> {
+            if (ev.getEventType() == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED && ev.getURL() != null) {
+                try {
+                    Desktop.getDesktop().browse(ev.getURL().toURI());
+                } catch (Exception ignore) {
+                }
+            }
+        });
+
+        JScrollPane scroll = new JScrollPane(editor);
+        scroll.setPreferredSize(new Dimension(720, 560));
+
+        JDialog dialog = new JDialog(this, "How to Use JSSH", false);
+        dialog.getContentPane().add(scroll);
+        dialog.pack();
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
     }
 
     private void exitApplication() {
