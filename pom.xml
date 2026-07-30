@@ -22,7 +22,7 @@
         <!-- Parent skips tests globally; this module has its own suite to run -->
         <skipTests>false</skipTests>
         <junit.version>6.0.1</junit.version>
-        <commonmark.version>0.24.0</commonmark.version>
+        <commonmark.version>0.28.0</commonmark.version>
         <jdk.version>25</jdk.version>
     </properties>
     <dependencies>
