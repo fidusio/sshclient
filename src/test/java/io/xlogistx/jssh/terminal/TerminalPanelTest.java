@@ -93,4 +93,38 @@ public class TerminalPanelTest {
         assertEquals(30, term.getRows());
         assertTrue(firstLine(term).startsWith("keepme"));
     }
+
+    @Test
+    public void pasteNormalizesWindowsAndMacLineEndings() {
+        TerminalPanel.LineEnding lf = TerminalPanel.LineEnding.LF;
+        assertEquals("a\nb\nc\n", TerminalPanel.normalizeForPaste("a\r\nb\rc\n", lf));
+        assertEquals("a\rb\rc\r", TerminalPanel.normalizeForPaste("a\r\nb\rc\n", TerminalPanel.LineEnding.CR));
+        assertEquals("a\r\nb\r\nc\r\n", TerminalPanel.normalizeForPaste("a\r\nb\rc\n", TerminalPanel.LineEnding.CRLF));
+        // CRLF must collapse to ONE terminator, never two
+        assertEquals("x\n", TerminalPanel.normalizeForPaste("x\r\n", lf));
+        assertEquals("\n\n", TerminalPanel.normalizeForPaste("\r\n\r\n", lf));
+        // Single-line text and empty input are untouched
+        assertEquals("plain", TerminalPanel.normalizeForPaste("plain", lf));
+        assertEquals("", TerminalPanel.normalizeForPaste("", lf));
+    }
+
+    @Test
+    public void bracketedPasteModeTracksDecset2004() {
+        TerminalPanel term = new TerminalPanel(80, 24);
+        assertFalse(term.isBracketedPaste());
+        feed(term, "\u001b[?2004h");
+        assertTrue(term.isBracketedPaste(), "ESC[?2004h should enable bracketed paste");
+        feed(term, "\u001b[?2004l");
+        assertFalse(term.isBracketedPaste(), "ESC[?2004l should disable bracketed paste");
+    }
+
+    @Test
+    public void hostLineEndingDetectedFromServerBanner() {
+        assertEquals(TerminalPanel.LineEnding.CR,
+                io.xlogistx.jssh.ssh.SSHConnection.detectHostLineEnding("SSH-2.0-OpenSSH_for_Windows_9.5"));
+        assertEquals(TerminalPanel.LineEnding.LF,
+                io.xlogistx.jssh.ssh.SSHConnection.detectHostLineEnding("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13"));
+        assertEquals(TerminalPanel.LineEnding.LF,
+                io.xlogistx.jssh.ssh.SSHConnection.detectHostLineEnding(null));
+    }
 }

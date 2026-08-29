@@ -3,9 +3,7 @@ package io.xlogistx.jssh.ui;
 import io.xlogistx.jssh.config.ConnectionConfig;
 import io.xlogistx.jssh.config.ConnectionManager;
 import io.xlogistx.jssh.config.JSSHConst;
-import io.xlogistx.jssh.config.KnownHostsManager;
 import io.xlogistx.jssh.ssh.SSHConnection;
-import io.xlogistx.jssh.terminal.TerminalPanel;
 import org.apache.sshd.client.channel.ChannelShell;
 
 import javax.swing.*;
@@ -28,15 +26,30 @@ public class ConnectDialog extends JDialog {
     private JTextField keyFileField;
     private JPasswordField passphraseField;
     private JComboBox<String> termTypeCombo;
+    private JComboBox<String> lineEndingCombo;   // paste newline: AUTO / LF / CR / CRLF
     private JSpinner colsSpinner;
     private JSpinner rowsSpinner;
     private JCheckBox x11ForwardingCheckbox;
     private JTextField x11DisplayField;
 
+    private JButton connectBtn;
+    private JProgressBar progressBar;
+    private JLabel progressLabel;
+
     private ConnectionManager connectionManager;
     private boolean connected = false;
     private MainFrame.SessionTab sessionTab;
     private boolean loadingProfile = false;
+
+    // Connect-in-flight state. 'connecting' is only touched on the EDT;
+    // 'cancelled' is read by the connect thread.
+    private boolean connecting = false;
+    private volatile boolean cancelled = false;
+    // The connection being built by the connect thread, so Cancel can abort it
+    private volatile SSHConnection inFlightConn;
+    // Dialog-owned copy of the credentials for the in-flight connect; wiped on
+    // cancel/close and once the SessionTab has taken its own copies
+    private MainFrame.SessionSpec pendingSpec;
 
     public ConnectDialog(Frame owner) {
         super(owner, "Connect to SSH Server", true);
@@ -45,6 +58,16 @@ public class ConnectDialog extends JDialog {
         pack();
         setMinimumSize(new Dimension(JSSHConst.CONNECT_DIALOG_MIN_WIDTH, JSSHConst.CONNECT_DIALOG_MIN_HEIGHT));
         setLocationRelativeTo(owner);
+
+        // Closing the window is a cancel: a connect still in flight must not
+        // turn into an orphaned session
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                cancel();
+            }
+        });
     }
 
     private void initUI() {
@@ -67,18 +90,32 @@ public class ConnectDialog extends JDialog {
 
         add(tabs, BorderLayout.CENTER);
 
-        // Buttons
+        // Buttons, with a progress indicator on the left while connecting
+        JPanel southPanel = new JPanel(new BorderLayout());
+
+        JPanel progressPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        progressBar = new JProgressBar();
+        progressBar.setIndeterminate(true);
+        progressBar.setPreferredSize(new Dimension(100, 16));
+        progressBar.setVisible(false);
+        progressPanel.add(progressBar);
+        progressLabel = new JLabel("");
+        progressLabel.setVisible(false);
+        progressPanel.add(progressLabel);
+        southPanel.add(progressPanel, BorderLayout.WEST);
+
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 
-        JButton connectBtn = new JButton("Connect");
+        connectBtn = new JButton("Connect");
         connectBtn.addActionListener(e -> connect());
         buttonPanel.add(connectBtn);
 
         JButton cancelBtn = new JButton("Cancel");
-        cancelBtn.addActionListener(e -> dispose());
+        cancelBtn.addActionListener(e -> cancel());
         buttonPanel.add(cancelBtn);
 
-        add(buttonPanel, BorderLayout.SOUTH);
+        southPanel.add(buttonPanel, BorderLayout.EAST);
+        add(southPanel, BorderLayout.SOUTH);
 
         // Enter key connects
         getRootPane().setDefaultButton(connectBtn);
@@ -166,6 +203,7 @@ public class ConnectDialog extends JDialog {
         useKeyAuth.setSelected(config.isUseKeyAuth());
         keyFileField.setText(config.getKeyFile() != null ? config.getKeyFile() : "");
         termTypeCombo.setSelectedItem(config.getTerminalType());
+        lineEndingCombo.setSelectedItem(config.getPasteLineEnding());
         colsSpinner.setValue(config.getColumns());
         rowsSpinner.setValue(config.getRows());
         x11ForwardingCheckbox.setSelected(config.isX11Forwarding());
@@ -188,6 +226,7 @@ public class ConnectDialog extends JDialog {
         keyFileField.setText(getDefaultKeyFile());
         passphraseField.setText("");
         termTypeCombo.setSelectedItem(JSSHConst.DEFAULT_TERMINAL_TYPE);
+        lineEndingCombo.setSelectedItem(JSSHConst.PASTE_LINE_ENDING_AUTO);
         colsSpinner.setValue(JSSHConst.DEFAULT_TERMINAL_COLS);
         rowsSpinner.setValue(JSSHConst.DEFAULT_TERMINAL_ROWS);
         x11ForwardingCheckbox.setSelected(false);
@@ -207,6 +246,7 @@ public class ConnectDialog extends JDialog {
         config.setUseKeyAuth(useKeyAuth.isSelected());
         config.setKeyFile(keyFileField.getText().trim());
         config.setTerminalType((String) termTypeCombo.getSelectedItem());
+        config.setPasteLineEnding((String) lineEndingCombo.getSelectedItem());
         config.setColumns((Integer) colsSpinner.getValue());
         config.setRows((Integer) rowsSpinner.getValue());
         config.setX11Forwarding(x11ForwardingCheckbox.isSelected());
@@ -424,6 +464,18 @@ public class ConnectDialog extends JDialog {
         termTypeCombo = new JComboBox<>(JSSHConst.TERMINAL_TYPES);
         panel.add(termTypeCombo, gbc);
 
+        // Paste newline (same row, to the right)
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        panel.add(new JLabel("Paste newline:"), gbc);
+
+        gbc.gridx = 3;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        lineEndingCombo = new JComboBox<>(JSSHConst.PASTE_LINE_ENDINGS);
+        lineEndingCombo.setToolTipText("Line ending sent for pasted text: AUTO detects from the server "
+                + "(LF for Unix-like hosts, CR for Windows OpenSSH)");
+        panel.add(lineEndingCombo, gbc);
+
         // Size
         gbc.gridx = 0;
         gbc.gridy = 1;
@@ -515,6 +567,11 @@ public class ConnectDialog extends JDialog {
     }
 
     private void connect() {
+        if (connecting) {
+            // A connect is already in flight - ignore the second click
+            return;
+        }
+
         String host = hostField.getText().trim();
         int port = (Integer) portSpinner.getValue();
         String username = usernameField.getText().trim();
@@ -529,8 +586,8 @@ public class ConnectDialog extends JDialog {
             return;
         }
 
-        // Get password/key info before connecting - kept as char[] so the
-        // session tab can wipe them when it closes
+        // Get password/key info before connecting - kept as char[] so they can
+        // be wiped once the session tab has taken its own copies
         final char[] password;
         final String keyFile;
         final char[] passphrase;
@@ -541,6 +598,7 @@ public class ConnectDialog extends JDialog {
             passphrase = passphraseField.getPassword();
             password = null;
             if (keyFile.isEmpty()) {
+                java.util.Arrays.fill(passphrase, '\0');
                 JOptionPane.showMessageDialog(this, "Please select a key file", "Error", JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -554,188 +612,199 @@ public class ConnectDialog extends JDialog {
             }
         }
 
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        // Snapshot the terminal / X11 fields here, on the EDT - the connect
+        // thread must not read Swing components
+        int cols = (Integer) colsSpinner.getValue();
+        int rows = (Integer) rowsSpinner.getValue();
+        String termType = (String) termTypeCombo.getSelectedItem();
+        String pasteLineEnding = (String) lineEndingCombo.getSelectedItem();
+        boolean enableX11 = x11ForwardingCheckbox.isSelected();
+        String x11Display = x11DisplayField.getText().trim();
 
-        // Run connection in background thread
+        String x11Host = null;
+        int x11DisplayNum = 0;
+        if (enableX11 && !x11Display.isEmpty()) {
+            // Parse display string (format: [host]:display[.screen])
+            int colonIdx = x11Display.lastIndexOf(':');
+            if (colonIdx >= 0) {
+                x11Host = colonIdx > 0 ? x11Display.substring(0, colonIdx) : "localhost";
+                try {
+                    String dispNum = x11Display.substring(colonIdx + 1);
+                    int dotIdx = dispNum.indexOf('.');
+                    if (dotIdx > 0) {
+                        dispNum = dispNum.substring(0, dotIdx);
+                    }
+                    x11DisplayNum = Integer.parseInt(dispNum);
+                } catch (NumberFormatException ex) {
+                    ex.printStackTrace();
+                    x11DisplayNum = 0;
+                }
+            }
+        }
+
+        final MainFrame.SessionSpec spec = new MainFrame.SessionSpec(host, port, username, password, keyFile, passphrase,
+                termType, cols, rows, enableX11, x11Host, x11DisplayNum, pasteLineEnding);
+        // The spec has its own copies - the field arrays are not needed any more
+        if (password != null) java.util.Arrays.fill(password, '\0');
+        if (passphrase != null) java.util.Arrays.fill(passphrase, '\0');
+        pendingSpec = spec;
+
+        setConnecting(true, "Connecting to " + host + (port != JSSHConst.DEFAULT_SSH_PORT ? ":" + port : "") + "...");
+
+        // Run connection in background thread. It touches no Swing state; the
+        // result is handed back to the EDT via onConnected / onConnectFailed.
+        final String title = username + "@" + host;
         Thread connectThread = new Thread(() -> {
             SSHConnection conn = null;
             try {
                 conn = new SSHConnection();
+                inFlightConn = conn;
 
-                // Host key verification with known hosts support
-                conn.setHostKeyVerifier((h, p, keyType, fingerprint, key) -> {
-                    KnownHostsManager knownHosts = KnownHostsManager.getInstance();
-                    KnownHostsManager.VerifyResult verifyResult = knownHosts.verify(h, p, fingerprint, key);
-
-                    switch (verifyResult) {
-                        case KNOWN_OK:
-                            // Host key is known and matches - auto accept
-                            return true;
-
-                        case KNOWN_CHANGED:
-                            // Host key has changed - security warning!
-                            String oldFingerprint = knownHosts.getStoredFingerprint(h, p);
-                            int changeResult = JOptionPane.showConfirmDialog(this,
-                                    "WARNING: HOST KEY HAS CHANGED!\n\n" +
-                                            "Host: " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + "\n" +
-                                            "Key type: " + keyType + "\n\n" +
-                                            "Old fingerprint:\n" + oldFingerprint + "\n\n" +
-                                            "New fingerprint:\n" + fingerprint + "\n\n" +
-                                            "This could indicate a man-in-the-middle attack,\n" +
-                                            "or the server's host key has been changed.\n\n" +
-                                            "Accept the new key?",
-                                    "Host Key Changed",
-                                    JOptionPane.YES_NO_OPTION,
-                                    JOptionPane.ERROR_MESSAGE);
-
-                            if (changeResult == JOptionPane.YES_OPTION) {
-                                // Update the stored key
-                                knownHosts.addHost(h, p, keyType, fingerprint, key);
-                                return true;
-                            }
-                            return false;
-
-                        case UNKNOWN:
-                        default:
-                            // New host - show dialog with remember checkbox
-                            JCheckBox rememberCheckbox = new JCheckBox("Remember this host", true);
-                            Object[] message = {
-                                    "Host key for " + h + (p != JSSHConst.DEFAULT_SSH_PORT ? ":" + p : "") + ":\n\n" +
-                                            "Type: " + keyType + "\n" +
-                                            "Fingerprint: " + fingerprint + "\n\n" +
-                                            "Accept this key?",
-                                    rememberCheckbox
-                            };
-
-                            int result = JOptionPane.showConfirmDialog(this,
-                                    message,
-                                    "Host Key Verification",
-                                    JOptionPane.YES_NO_OPTION,
-                                    JOptionPane.WARNING_MESSAGE);
-
-                            if (result == JOptionPane.YES_OPTION) {
-                                if (rememberCheckbox.isSelected()) {
-                                    knownHosts.addHost(h, p, keyType, fingerprint, key);
-                                }
-                                return true;
-                            }
-                            return false;
-                    }
-                });
+                // Host key verification with known hosts support (SSHConnection
+                // marshals the verifier's dialogs onto the EDT)
+                conn.setHostKeyVerifier(MainFrame.createHostKeyVerifier(this));
 
                 // Connect (includes host key verification)
-                conn.connect(host, port, 30000);
+                conn.connect(spec.host, spec.port, JSSHConst.CONNECTION_TIMEOUT_MS);
+                if (cancelled) {
+                    throw new IOException("Cancelled");
+                }
 
                 // Now authenticate (separate from connect)
                 boolean authenticated;
-                if (useKey) {
-                    authenticated = conn.authenticatePublicKey(username, keyFile, passphrase, 30000);
+                if (spec.isKeyAuth()) {
+                    authenticated = conn.authenticatePublicKey(spec.username, spec.keyFile, spec.passphrase,
+                            JSSHConst.AUTH_TIMEOUT_MS);
                 } else {
-                    authenticated = conn.authenticatePassword(username, password, 30000);
+                    authenticated = conn.authenticatePassword(spec.username, spec.password,
+                            JSSHConst.AUTH_TIMEOUT_MS);
                 }
 
                 if (!authenticated) {
                     throw new IOException("Authentication failed - check username/password");
                 }
-
-                // Create terminal
-                int cols = (Integer) colsSpinner.getValue();
-                int rows = (Integer) rowsSpinner.getValue();
-                String termType = (String) termTypeCombo.getSelectedItem();
-
-                // X11 forwarding settings
-                boolean enableX11 = x11ForwardingCheckbox.isSelected();
-                String x11Display = x11DisplayField.getText().trim();
-                String x11Host = null;
-                int x11DisplayNum = 0;
-
-                if (enableX11 && !x11Display.isEmpty()) {
-                    // Parse display string (format: [host]:display[.screen])
-                    int colonIdx = x11Display.lastIndexOf(':');
-                    if (colonIdx >= 0) {
-                        x11Host = colonIdx > 0 ? x11Display.substring(0, colonIdx) : "localhost";
-                        try {
-                            String dispNum = x11Display.substring(colonIdx + 1);
-                            int dotIdx = dispNum.indexOf('.');
-                            if (dotIdx > 0) {
-                                dispNum = dispNum.substring(0, dotIdx);
-                            }
-                            x11DisplayNum = Integer.parseInt(dispNum);
-                        } catch (NumberFormatException ex) {
-                            ex.printStackTrace();
-                            x11DisplayNum = 0;
-                        }
-                    }
+                if (cancelled) {
+                    throw new IOException("Cancelled");
                 }
 
-                TerminalPanel terminal = new TerminalPanel(cols, rows);
-
                 // Open shell with X11 forwarding if enabled
-                final String fx11Host = x11Host;
-                final int fx11DisplayNum = x11DisplayNum;
-                ChannelShell shell = conn.openShell(termType, cols, rows, enableX11, fx11Host, fx11DisplayNum);
+                ChannelShell shell = conn.openShell(spec.termType, spec.cols, spec.rows,
+                        spec.x11Forwarding, spec.x11Host, spec.x11DisplayNum);
 
-                // Connect streams
-                terminal.setOutputStream(shell.getInvertedIn());
-
-                // Read from shell in background
-                final SSHConnection finalConn = conn;
-                final TerminalPanel finalTerminal = terminal;
-                Thread reader = new Thread(() -> {
-                    byte[] buf = new byte[JSSHConst.SHELL_READ_BUFFER_SIZE];
-                    try {
-                        InputStream in = shell.getInvertedOut();
-                        int n;
-                        while ((n = in.read(buf)) >= 0) {
-                            final byte[] data = buf.clone();
-                            final int len = n;
-                            SwingUtilities.invokeLater(() -> finalTerminal.write(data, 0, len));
-                        }
-                        // Stream ended normally - connection closed
-                        SwingUtilities.invokeLater(() -> {
-                            finalTerminal.displayMessage("*** Connection closed by remote host ***", 9); // Bright red
-                        });
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                        // Connection error
-                        final String errorMsg = e.getMessage();
-                        SwingUtilities.invokeLater(() -> {
-                            finalTerminal.displayMessage("*** Connection lost: " + (errorMsg != null ? errorMsg : "Unknown error") + " ***", 9);
-                        });
-                    }
-                });
-                reader.setDaemon(true);
-                reader.start();
-
-                // Success - update UI on EDT
                 final SSHConnection successConn = conn;
-                SwingUtilities.invokeLater(() -> {
-                    sessionTab = new MainFrame.SessionTab(successConn, terminal);
-                    sessionTab.setTitle(username + "@" + host);
-                    // Store connection info for cloning
-                    sessionTab.setConnectionInfo(host, port, username, password, keyFile, passphrase);
-                    connected = true;
-                    setCursor(Cursor.getDefaultCursor());
-                    dispose();
-                });
+                SwingUtilities.invokeLater(() -> onConnected(successConn, shell, spec, title));
 
             } catch (Exception e) {
-                e.printStackTrace();
+                if (!cancelled) {
+                    e.printStackTrace();
+                }
                 final SSHConnection failedConn = conn;
                 final String errorMsg = e.getMessage();
-                SwingUtilities.invokeLater(() -> {
-                    setCursor(Cursor.getDefaultCursor());
-                    if (failedConn != null) {
-                        failedConn.close();
-                    }
-                    JOptionPane.showMessageDialog(ConnectDialog.this,
-                            "Connection failed: " + errorMsg,
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE);
-                });
+                SwingUtilities.invokeLater(() -> onConnectFailed(failedConn, errorMsg));
+            } finally {
+                inFlightConn = null;
             }
-        });
+        }, "jssh-connect");
+        connectThread.setDaemon(true);
         connectThread.start();
+    }
+
+    /**
+     * Connect thread succeeded (EDT). If the user cancelled or closed the dialog
+     * meanwhile, the session is closed and discarded rather than orphaned.
+     */
+    private void onConnected(SSHConnection conn, ChannelShell shell, MainFrame.SessionSpec spec, String title) {
+        if (cancelled) {
+            conn.close();
+            spec.wipe();
+            if (pendingSpec == spec) {
+                pendingSpec = null;
+            }
+            connecting = false;
+            return;
+        }
+
+        try {
+            // Builds the TerminalPanel + SessionTab on the EDT and starts the reader thread
+            sessionTab = MainFrame.attachShell(conn, shell, spec, title, null);
+            connected = true;
+        } catch (RuntimeException e) {
+            onConnectFailed(conn, e.getMessage());
+            return;
+        } finally {
+            // The session tab keeps its own copies of the credentials
+            spec.wipe();
+            if (pendingSpec == spec) {
+                pendingSpec = null;
+            }
+        }
+
+        setConnecting(false, null);
+        dispose();
+    }
+
+    /**
+     * Connect thread failed (EDT). Silent if the dialog was already cancelled.
+     */
+    private void onConnectFailed(SSHConnection conn, String errorMsg) {
+        if (conn != null) {
+            conn.close();
+        }
+        if (pendingSpec != null) {
+            pendingSpec.wipe();
+            pendingSpec = null;
+        }
+        if (cancelled) {
+            connecting = false;
+            return;
+        }
+        setConnecting(false, null);
+        JOptionPane.showMessageDialog(ConnectDialog.this,
+                "Connection failed: " + errorMsg,
+                "Error",
+                JOptionPane.ERROR_MESSAGE);
+    }
+
+    /**
+     * Toggle the "connect in flight" UI: Connect disabled, progress shown.
+     */
+    private void setConnecting(boolean inFlight, String message) {
+        connecting = inFlight;
+        connectBtn.setEnabled(!inFlight);
+        progressBar.setVisible(inFlight);
+        progressLabel.setText(inFlight && message != null ? message : "");
+        progressLabel.setVisible(inFlight);
+        setCursor(inFlight ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
+    }
+
+    /**
+     * Cancel button / window close. Any connect still in flight will close its
+     * connection when it completes (see {@link #onConnected}).
+     */
+    private void cancel() {
+        cancelled = true;
+        // Abort an in-flight connect instead of letting it run to its timeout:
+        // closing the client fails the pending connect/auth on the connect
+        // thread, which then reports (silently, since cancelled) and cleans up.
+        SSHConnection conn = inFlightConn;
+        if (conn != null) {
+            Thread abort = new Thread(conn::close, "jssh-connect-abort");
+            abort.setDaemon(true);
+            abort.start();
+        }
+        dispose();
+    }
+
+    @Override
+    public void dispose() {
+        // Wipe the dialog's own credential copies. While a connect is still in
+        // flight the arrays are in use by the connect thread; onConnected /
+        // onConnectFailed (which always run, even after dispose) wipe them then.
+        if (!connecting && pendingSpec != null) {
+            pendingSpec.wipe();
+            pendingSpec = null;
+        }
+        super.dispose();
     }
 
     /**

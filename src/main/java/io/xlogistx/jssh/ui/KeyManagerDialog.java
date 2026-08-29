@@ -1,6 +1,11 @@
 package io.xlogistx.jssh.ui;
 
 import io.xlogistx.jssh.config.JSSHConst;
+import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyEncryptionContext;
+import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
+import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.util.io.output.SecureByteArrayOutputStream;
 import org.zoxweb.server.io.IOUtil;
 
 import javax.swing.*;
@@ -9,9 +14,14 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.*;
 import java.security.spec.*;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.EnumSet;
+import java.util.Set;
 
 /**
  * SSH key manager dialog for generating and managing SSH keys
@@ -204,91 +214,79 @@ public class KeyManagerDialog extends JDialog {
             "Generate SSH Key", JOptionPane.OK_CANCEL_OPTION);
         
         if (result != JOptionPane.OK_OPTION) return;
-        
-        String pass = new String(passField.getPassword());
-        String confirm = new String(confirmField.getPassword());
-        
-        if (!pass.equals(confirm)) {
-            JOptionPane.showMessageDialog(this, "Passphrases do not match", 
+
+        // Passphrase stays a char[] so it can be wiped once the key is written
+        final char[] pass = passField.getPassword();
+        char[] confirm = confirmField.getPassword();
+        boolean match = Arrays.equals(pass, confirm);
+        Arrays.fill(confirm, '\0');
+
+        if (!match) {
+            Arrays.fill(pass, '\0');
+            JOptionPane.showMessageDialog(this, "Passphrases do not match",
                 "Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
-        
+
         String filename = nameField.getText().trim();
-        String comment = commentField.getText().trim();
+        final String comment = commentField.getText().trim();
         String type = (String) typeCombo.getSelectedItem();
-        
+
+        if (filename.isEmpty() || filename.contains("/") || filename.contains("\\")) {
+            Arrays.fill(pass, '\0');
+            JOptionPane.showMessageDialog(this, "Please enter a plain file name (no directories)",
+                "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
         // Create .ssh directory if needed
         File dir = new File(sshDir);
         if (!dir.exists()) {
             dir.mkdirs();
         }
 
-        File privateFile = new File(sshDir, filename);
-        File publicFile = new File(sshDir, filename + ".pub");
+        final File privateFile = new File(sshDir, filename);
+        final File publicFile = new File(sshDir, filename + ".pub");
 
         if (privateFile.exists() || publicFile.exists()) {
             int overwrite = JOptionPane.showConfirmDialog(this,
                 "Key already exists. Overwrite?",
                 "Confirm",
                 JOptionPane.YES_NO_OPTION);
-            if (overwrite != JOptionPane.YES_OPTION) return;
-            // Remove the old files ourselves, otherwise ssh-keygen prompts
-            // "Overwrite (y/n)?" on stdin and hangs forever
-            privateFile.delete();
-            publicFile.delete();
+            if (overwrite != JOptionPane.YES_OPTION) {
+                Arrays.fill(pass, '\0');
+                return;
+            }
         }
 
-        // Generate key pair using ssh-keygen (most reliable)
-        String keyType;
-        if (type.startsWith("Ed25519")) keyType = "ed25519";
-        else if (type.startsWith("ECDSA")) keyType = "ecdsa";
-        else keyType = "rsa";
-
-        ProcessBuilder pb = new ProcessBuilder(
-            "ssh-keygen", "-t", keyType, "-f", privateFile.getAbsolutePath(),
-            "-N", pass, "-C", comment
-        );
-
-        if (keyType.equals("rsa")) {
-            pb.command().add("-b");
-            pb.command().add(String.valueOf(JSSHConst.RSA_KEY_BITS));
+        // Map the dialog choice to an OpenSSH key type name
+        final String keyType;
+        final int keyBits;
+        if (type.startsWith("Ed25519")) {
+            keyType = KeyPairProvider.SSH_ED25519;
+            keyBits = ED25519_KEY_BITS;
+        } else if (type.startsWith("ECDSA")) {
+            keyType = KeyPairProvider.ECDSA_SHA2_NISTP256;
+            keyBits = ECDSA_NISTP256_KEY_BITS;
+        } else {
+            keyType = KeyPairProvider.SSH_RSA;
+            keyBits = JSSHConst.RSA_KEY_BITS;
         }
-
-        pb.redirectErrorStream(true);
 
         setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 
-        // Run ssh-keygen off the EDT so an unexpected prompt or slow run can't freeze the UI
+        // Generate in-process (RSA-4096 takes a moment) off the EDT. Nothing
+        // below touches Swing until done(); all inputs were snapshotted above.
         SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() throws Exception {
-                Process process = pb.start();
-                // No input will ever be supplied - EOF any unexpected prompt instead of hanging
-                process.getOutputStream().close();
-
-                ByteArrayOutputStream output = new ByteArrayOutputStream();
-                byte[] buf = new byte[1024];
-                int n;
-                try (InputStream is = process.getInputStream()) {
-                    while ((n = is.read(buf)) >= 0) {
-                        output.write(buf, 0, n);
-                    }
-                }
-
-                if (!process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                    throw new IOException("ssh-keygen timed out");
-                }
-                if (process.exitValue() != 0) {
-                    throw new IOException("ssh-keygen failed with exit code " + process.exitValue()
-                        + ": " + output.toString().trim());
-                }
+                generateKeyPairFiles(keyType, keyBits, privateFile.toPath(), comment, pass);
                 return null;
             }
 
             @Override
             protected void done() {
+                Arrays.fill(pass, '\0');
                 setCursor(Cursor.getDefaultCursor());
                 try {
                     get();
@@ -300,15 +298,98 @@ public class KeyManagerDialog extends JDialog {
                         "Success",
                         JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception e) {
+                    Throwable cause = e instanceof java.util.concurrent.ExecutionException && e.getCause() != null
+                        ? e.getCause() : e;
                     JOptionPane.showMessageDialog(KeyManagerDialog.this,
-                        "Failed to generate key: " + e.getMessage() + "\n\n" +
-                        "Make sure ssh-keygen is installed.",
+                        "Failed to generate key: " + cause.getMessage(),
                         "Error",
                         JOptionPane.ERROR_MESSAGE);
                 }
             }
         };
         worker.execute();
+    }
+
+    /** Ed25519 keys have a fixed size; the value is only informational to MINA. */
+    static final int ED25519_KEY_BITS = 256;
+    /** ECDSA nistp256 curve size. */
+    static final int ECDSA_NISTP256_KEY_BITS = 256;
+
+    /**
+     * Generate an SSH key pair in-process and write it in OpenSSH format:
+     * {@code privateFile} (openssh-key-v1, encrypted with aes256-ctr/bcrypt when
+     * a passphrase is given) and {@code privateFile + ".pub"} (single-line
+     * public key). Equivalent to {@code ssh-keygen -t <type> -b <bits> -f <file>}
+     * without exposing the passphrase on a command line.
+     * <p>
+     * Headless-safe; does not touch Swing.
+     *
+     * @param keyType     OpenSSH key type name, e.g. {@link KeyPairProvider#SSH_ED25519},
+     *                    {@link KeyPairProvider#ECDSA_SHA2_NISTP256}, {@link KeyPairProvider#SSH_RSA}
+     * @param keyBits     key size in bits (RSA modulus / curve size; ignored for Ed25519)
+     * @param privateFile destination private key path; existing files are replaced
+     * @param comment     key comment (may be null/empty)
+     * @param passphrase  passphrase, or null/empty for an unencrypted key. The caller
+     *                    owns the array and should wipe it afterwards; this method
+     *                    does not retain it.
+     */
+    public static void generateKeyPairFiles(String keyType, int keyBits, Path privateFile,
+                                            String comment, char[] passphrase)
+            throws IOException, GeneralSecurityException {
+        Path publicFile = privateFile.resolveSibling(privateFile.getFileName() + ".pub");
+
+        KeyPair keyPair = KeyUtils.generateKeyPair(keyType, keyBits);
+
+        // Serialize both halves to memory first so a failure leaves no half-written files
+        byte[] privateBytes;
+        byte[] publicBytes;
+        OpenSSHKeyEncryptionContext encryption = null;
+        try {
+            if (passphrase != null && passphrase.length > 0) {
+                encryption = new OpenSSHKeyEncryptionContext();
+                encryption.setCipherType("256");   // aes256-ctr, the ssh-keygen default
+                // MINA's context only accepts a String; it is dropped right after writing
+                encryption.setPassword(new String(passphrase));
+            }
+            try (SecureByteArrayOutputStream out = new SecureByteArrayOutputStream()) {
+                OpenSSHKeyPairResourceWriter.INSTANCE.writePrivateKey(keyPair, comment, encryption, out);
+                privateBytes = out.toByteArray();
+            }
+            try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                OpenSSHKeyPairResourceWriter.INSTANCE.writePublicKey(keyPair, comment, out);
+                out.write('\n');
+                publicBytes = out.toByteArray();
+            }
+        } finally {
+            if (encryption != null) {
+                encryption.setPassword(null);
+            }
+        }
+
+        try {
+            // Private key: owner read/write only (0600) where the filesystem supports it
+            Files.deleteIfExists(privateFile);
+            if (privateFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+                Files.newByteChannel(privateFile,
+                        EnumSet.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                        PosixFilePermissions.asFileAttribute(perms)).close();
+                Files.setPosixFilePermissions(privateFile, perms);
+            }
+            Files.write(privateFile, privateBytes);
+            if (!privateFile.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                // Best effort on non-POSIX (Windows): drop "everyone" access bits
+                File f = privateFile.toFile();
+                f.setReadable(false, false);
+                f.setReadable(true, true);
+                f.setWritable(false, false);
+                f.setWritable(true, true);
+                f.setExecutable(false, false);
+            }
+            Files.write(publicFile, publicBytes);
+        } finally {
+            Arrays.fill(privateBytes, (byte) 0);
+        }
     }
     
     private void importKey() {

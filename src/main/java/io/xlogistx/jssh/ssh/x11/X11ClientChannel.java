@@ -201,10 +201,40 @@ public class X11ClientChannel extends AbstractServerChannel {
         }
     }
 
+    /**
+     * EOF from the SSH peer (the forwarded X client closed its write side):
+     * half-close only, like MINA's {@code TcpipServerChannel.handleEof} ->
+     * {@code port.handleEof()} (shutdownOutputStream). Bytes still flowing from
+     * the X server to the peer keep going; the channel is closed when the X
+     * server side reaches EOF in {@link #pumpXServerToPeer()}.
+     */
     @Override
     public void handleEof() throws IOException {
         super.handleEof();
-        closeConnection();
+        shutdownOutputToXServer();
+    }
+
+    private void shutdownOutputToXServer() {
+        try {
+            if (toXServer != null) {
+                toXServer.flush();
+            }
+            if (connection instanceof Socket) {
+                Socket s = (Socket) connection;
+                if (!s.isClosed() && !s.isOutputShutdown()) {
+                    s.shutdownOutput();
+                }
+            } else if (connection instanceof SocketChannel) {
+                SocketChannel ch = (SocketChannel) connection;
+                if (ch.isOpen()) {
+                    ch.shutdownOutput();
+                }
+            }
+        } catch (IOException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("[X11] shutdownOutput to local X server failed: {}", e.getMessage());
+            }
+        }
     }
 
     private void closeConnection() {

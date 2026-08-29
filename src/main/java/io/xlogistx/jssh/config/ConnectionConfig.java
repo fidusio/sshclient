@@ -20,6 +20,8 @@ public class ConnectionConfig implements Serializable {
     private int rows = JSSHConst.DEFAULT_TERMINAL_ROWS;
     private boolean x11Forwarding = false;
     private String x11Display = JSSHConst.DEFAULT_X11_DISPLAY;
+    // Line terminator for pasted text: AUTO (from server banner), LF, CR or CRLF
+    private String pasteLineEnding = JSSHConst.PASTE_LINE_ENDING_AUTO;
 
     public ConnectionConfig() {
     }
@@ -117,6 +119,27 @@ public class ConnectionConfig implements Serializable {
         this.x11Display = x11Display;
     }
 
+    public String getPasteLineEnding() {
+        return pasteLineEnding;
+    }
+
+    public void setPasteLineEnding(String pasteLineEnding) {
+        this.pasteLineEnding = normalizePasteLineEnding(pasteLineEnding);
+    }
+
+    /** Map any input to one of {@link JSSHConst#PASTE_LINE_ENDINGS}; unknown → AUTO. */
+    static String normalizePasteLineEnding(String value) {
+        if (value != null) {
+            String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+            for (String allowed : JSSHConst.PASTE_LINE_ENDINGS) {
+                if (allowed.equals(v)) {
+                    return allowed;
+                }
+            }
+        }
+        return JSSHConst.PASTE_LINE_ENDING_AUTO;
+    }
+
     /**
      * Save to properties format
      */
@@ -133,6 +156,7 @@ public class ConnectionConfig implements Serializable {
         props.setProperty("rows", String.valueOf(rows));
         props.setProperty("x11Forwarding", String.valueOf(x11Forwarding));
         props.setProperty("x11Display", x11Display != null ? x11Display : JSSHConst.DEFAULT_X11_DISPLAY);
+        props.setProperty("pasteLineEnding", normalizePasteLineEnding(pasteLineEnding));
         return props;
     }
 
@@ -143,16 +167,53 @@ public class ConnectionConfig implements Serializable {
         ConnectionConfig config = new ConnectionConfig();
         config.name = props.getProperty("name", "");
         config.host = props.getProperty("host", "");
-        config.port = Integer.parseInt(props.getProperty("port", String.valueOf(JSSHConst.DEFAULT_SSH_PORT)));
+        config.port = parseIntOrDefault(props, "port", JSSHConst.DEFAULT_SSH_PORT, JSSHConst.MIN_PORT, JSSHConst.MAX_PORT);
         config.username = props.getProperty("username", "");
         config.useKeyAuth = Boolean.parseBoolean(props.getProperty("useKeyAuth", "false"));
         config.keyFile = props.getProperty("keyFile", "");
         config.terminalType = props.getProperty("terminalType", JSSHConst.DEFAULT_TERMINAL_TYPE);
-        config.columns = Integer.parseInt(props.getProperty("columns", String.valueOf(JSSHConst.DEFAULT_TERMINAL_COLS)));
-        config.rows = Integer.parseInt(props.getProperty("rows", String.valueOf(JSSHConst.DEFAULT_TERMINAL_ROWS)));
+        config.columns = parseIntOrDefault(props, "columns", JSSHConst.DEFAULT_TERMINAL_COLS,
+                JSSHConst.MIN_TERMINAL_COLS, JSSHConst.MAX_TERMINAL_COLS);
+        config.rows = parseIntOrDefault(props, "rows", JSSHConst.DEFAULT_TERMINAL_ROWS,
+                JSSHConst.MIN_TERMINAL_ROWS, JSSHConst.MAX_TERMINAL_ROWS);
         config.x11Forwarding = Boolean.parseBoolean(props.getProperty("x11Forwarding", "false"));
         config.x11Display = props.getProperty("x11Display", JSSHConst.DEFAULT_X11_DISPLAY);
+        config.pasteLineEnding = normalizePasteLineEnding(props.getProperty("pasteLineEnding"));
         return config;
+    }
+
+    /**
+     * Read an integer property leniently: a missing, blank, non-numeric or
+     * out-of-range value falls back to {@code defaultValue} (with a warning on
+     * stderr) instead of throwing, so one bad field never discards a whole
+     * saved profile.
+     */
+    static int parseIntOrDefault(Properties props, String key, int defaultValue, int min, int max) {
+        String raw = props.getProperty(key);
+        if (raw == null) {
+            return defaultValue;
+        }
+        String value = raw.trim();
+        if (value.isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < min || parsed > max) {
+                warn(props, key, raw, defaultValue, "out of range " + min + ".." + max);
+                return defaultValue;
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            warn(props, key, raw, defaultValue, "not a number");
+            return defaultValue;
+        }
+    }
+
+    private static void warn(Properties props, String key, String raw, int defaultValue, String reason) {
+        String name = props.getProperty("name", "");
+        System.err.println("Warning: connection profile" + (name.isEmpty() ? "" : " '" + name + "'")
+                + ": invalid " + key + "=" + raw + " (" + reason + "), using default " + defaultValue);
     }
 
     @Override

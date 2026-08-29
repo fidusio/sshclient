@@ -16,8 +16,15 @@ public class ConnectionManager {
     private Map<String, ConnectionConfig> connections = new LinkedHashMap<>();
 
     private ConnectionManager() {
-        String home = System.getProperty("user.home");
-        configPath = Paths.get(home, JSSHConst.CONFIG_DIR, JSSHConst.CONNECTIONS_DIR);
+        this(Paths.get(System.getProperty("user.home"), JSSHConst.CONFIG_DIR, JSSHConst.CONNECTIONS_DIR));
+    }
+
+    /**
+     * Manager backed by an explicit directory. Package-private so tests can
+     * point it at a temporary directory instead of {@code ~/.jssh/connections}.
+     */
+    ConnectionManager(Path configPath) {
+        this.configPath = configPath;
 
         try {
             Files.createDirectories(configPath);
@@ -48,6 +55,8 @@ public class ConnectionManager {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(configPath, "*.properties")) {
             for (Path file : stream) {
                 try {
+                    // Numeric fields are parsed leniently (see ConnectionConfig.fromProperties),
+                    // so only an unreadable file ends up here
                     ConnectionConfig config = load(file);
                     if (config != null && config.getName() != null) {
                         connections.put(config.getName(), config);

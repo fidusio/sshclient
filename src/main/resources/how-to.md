@@ -34,7 +34,15 @@ or `user@[ipv6]:port`, then prompts for a password.
 
 - Standard VT100/ANSI terminal with scrollback and 256-color support.
 - **Copy/paste:** select text to copy; **Ctrl+Shift+V** (or right-click) to
-  paste. **Ctrl+Shift+C** copies the selection in the terminal.
+  paste. **Ctrl+Shift+C** copies the selection in the terminal. Line endings in
+  pasted text are converted to the remote host's convention (LF for Unix-like
+  hosts, CR for Windows OpenSSH) — override it per profile with the
+  **Paste newline** setting on the Terminal tab of the connect dialog — and
+  bracketed paste is honoured so editors such as vim/nano don't auto-indent
+  pasted blocks.
+- **Alt+key** sends Meta (ESC + key) like xterm, so readline/emacs bindings
+  such as `M-b`, `M-f`, `M-.` work. While a terminal has focus this takes
+  precedence over the menu mnemonics (use the mouse or F10 for the menus).
 - **Ctrl+C** copies when text is selected, otherwise sends an interrupt.
 - **Shift+PageUp / PageDown** scrolls through history.
 - Resize the window to resize the remote terminal.
@@ -95,7 +103,8 @@ and is not carried into cloned sessions.
 
 **Tools → Key Manager** lets you:
 
-- **Generate** Ed25519, ECDSA, or RSA keys (uses the system `ssh-keygen`).
+- **Generate** Ed25519, ECDSA, or RSA keys in OpenSSH format (built in — no
+  `ssh-keygen` needed; the passphrase never leaves the process).
 - **Import** an existing private key into `~/.ssh`.
 - **Export public key** to copy into a server's `authorized_keys`.
 - View key fingerprints.

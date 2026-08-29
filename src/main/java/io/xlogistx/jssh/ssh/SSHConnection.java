@@ -53,6 +53,20 @@ public class SSHConnection {
 
     private HostKeyVerifier hostKeyVerifier;
 
+    // Host-key prompt bookkeeping so connect()'s timeout excludes the time the
+    // user spends in the (modal) verification dialog: nanoTime at which the
+    // current prompt started (0 when none is open) and the total spent in
+    // prompts that have completed.
+    private final java.util.concurrent.atomic.AtomicLong hostKeyPromptStart =
+            new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong hostKeyPromptTotal =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
+    // X11: warn at most once per connection when no local cookie is available
+    private final java.util.concurrent.atomic.AtomicBoolean x11CookieWarned =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile String x11Warning;
+
     // Track active tunnels for UI display
     private final List<TunnelInfo> tunnels = new ArrayList<>();
 
@@ -66,6 +80,15 @@ public class SSHConnection {
         void onDisconnected(String reason);
 
         void onError(String message);
+
+        /**
+         * Non-fatal problem the user should know about (e.g. X11 forwarding is
+         * enabled but no local X authorization cookie could be found). Defaults
+         * to {@link #onError(String)} so existing listeners still see it.
+         */
+        default void onWarning(String message) {
+            onError(message);
+        }
     }
 
     private ConnectionListener listener;
@@ -97,20 +120,30 @@ public class SSHConnection {
                 String keyType = getKeyType(serverKey);
                 String fingerprint = getFingerprint(serverKey);
 
-                // Must run on EDT for Swing dialogs
-                if (javax.swing.SwingUtilities.isEventDispatchThread()) {
-                    return verifier.verify(host, port, keyType, fingerprint, serverKey);
-                } else {
-                    final java.util.concurrent.atomic.AtomicBoolean result =
-                            new java.util.concurrent.atomic.AtomicBoolean(false);
-                    try {
-                        javax.swing.SwingUtilities.invokeAndWait(() -> {
-                            result.set(verifier.verify(host, port, keyType, fingerprint, serverKey));
-                        });
-                    } catch (Exception e) {
-                        return false;
+                // The verifier may block in a modal dialog for as long as the user
+                // likes; connect() pauses its timeout while this is in progress.
+                hostKeyPromptStart.set(System.nanoTime());
+                try {
+                    // Must run on EDT for Swing dialogs
+                    if (javax.swing.SwingUtilities.isEventDispatchThread()) {
+                        return verifier.verify(host, port, keyType, fingerprint, serverKey);
+                    } else {
+                        final java.util.concurrent.atomic.AtomicBoolean result =
+                                new java.util.concurrent.atomic.AtomicBoolean(false);
+                        try {
+                            javax.swing.SwingUtilities.invokeAndWait(() -> {
+                                result.set(verifier.verify(host, port, keyType, fingerprint, serverKey));
+                            });
+                        } catch (Exception e) {
+                            return false;
+                        }
+                        return result.get();
                     }
-                    return result.get();
+                } finally {
+                    long started = hostKeyPromptStart.getAndSet(0);
+                    if (started != 0) {
+                        hostKeyPromptTotal.addAndGet(System.nanoTime() - started);
+                    }
                 }
             }
         });
@@ -155,10 +188,25 @@ public class SSHConnection {
 
         ConnectFuture connectFuture = client.connect(null, host, port);
 
-        // Honor the caller's timeout. Note this window also covers the host-key
-        // verification dialog, so callers should pass a value that allows for it.
-        if (!connectFuture.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            throw new IOException("Connection timeout");
+        // Honor the caller's timeout, but don't count time the user spends in the
+        // host-key verification dialog (which runs inside this window, on MINA's
+        // thread, via the ServerKeyVerifier above): poll the future and compare
+        // the elapsed time minus prompt time against the deadline.
+        final long startNanos = System.nanoTime();
+        final long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMs));
+        final long pollMs = Math.max(1, Math.min(200, timeoutMs));
+        while (!connectFuture.await(pollMs, TimeUnit.MILLISECONDS)) {
+            long elapsed = System.nanoTime() - startNanos - hostKeyPromptNanos();
+            if (elapsed >= timeoutNanos) {
+                // Cancel so a late TCP connect doesn't leak a session: MINA closes
+                // a session that completes after the future was cancelled.
+                org.apache.sshd.common.future.CancelFuture cancellation = connectFuture.cancel();
+                if (cancellation != null || !connectFuture.isDone()) {
+                    throw new IOException("Connection timeout");
+                }
+                // Completed between the await and the cancel - fall through and use the result
+                break;
+            }
         }
 
         if (!connectFuture.isConnected()) {
@@ -209,6 +257,19 @@ public class SSHConnection {
     }
 
     /**
+     * Nanoseconds spent so far in host-key prompts (completed ones plus the one
+     * currently open, if any).
+     */
+    private long hostKeyPromptNanos() {
+        long total = hostKeyPromptTotal.get();
+        long started = hostKeyPromptStart.get();
+        if (started != 0) {
+            total += System.nanoTime() - started;
+        }
+        return total;
+    }
+
+    /**
      * Deliver onDisconnected to the listener at most once for this connection.
      */
     private void notifyDisconnected(String reason) {
@@ -225,7 +286,13 @@ public class SSHConnection {
         session.setUsername(username);
         session.addPasswordIdentity(password);
 
-        return authenticate(timeoutMs);
+        try {
+            return authenticate(timeoutMs);
+        } finally {
+            // MINA keeps registered identities for the session's lifetime; drop
+            // the plaintext as soon as the auth exchange is over (success or not)
+            session.removePasswordIdentity(password);
+        }
     }
 
     /**
@@ -257,7 +324,12 @@ public class SSHConnection {
         KeyPair keyPair = loadKeyPair(keyFile, passphrase);
         session.addPublicKeyIdentity(keyPair);
 
-        return authenticate(timeoutMs);
+        try {
+            return authenticate(timeoutMs);
+        } finally {
+            // Don't leave the private key registered on the session after auth
+            session.removePublicKeyIdentity(keyPair);
+        }
     }
 
     private boolean authenticate(long timeoutMs) throws IOException {
@@ -407,14 +479,12 @@ public class SSHConnection {
      */
     private byte[] setupX11Forwarding(String x11Host, int displayNumber) {
         try {
-            boolean local = x11Host == null || x11Host.isEmpty()
-                    || "unix".equalsIgnoreCase(x11Host) || "localhost".equalsIgnoreCase(x11Host)
-                    || "127.0.0.1".equals(x11Host);
+            boolean local = isLocalX11Host(x11Host);
 
             // For a local display, connect to the X server's Unix-domain socket
             // (like `ssh -X`); TCP is the fallback and the only option for a
             // remote display host or on systems without the socket (e.g. Windows).
-            String unixSocketPath = local ? resolveLocalX11Socket(displayNumber) : null;
+            String unixSocketPath = x11SocketPathFor(x11Host, displayNumber);
             String tcpHost = local ? "127.0.0.1" : x11Host;
             int port = JSSHConst.X_SERVER_PORT + displayNumber;
             java.net.InetSocketAddress xServer = new java.net.InetSocketAddress(tcpHost, port);
@@ -422,6 +492,21 @@ public class SSHConnection {
             byte[] fakeCookie = new byte[16];
             new java.security.SecureRandom().nextBytes(fakeCookie);
             byte[] realCookie = io.xlogistx.jssh.ssh.x11.XAuthority.findMagicCookie(displayNumber);
+            if (realCookie == null) {
+                // Without the local cookie the fake one we advertise to the server
+                // is passed through unchanged, and an X server with access control
+                // enabled will refuse every forwarded connection - say so, once.
+                String xauth = System.getenv("XAUTHORITY");
+                String where = (xauth != null && !xauth.isEmpty())
+                        ? "$XAUTHORITY (" + xauth + ")"
+                        : System.getProperty("user.home") + File.separator + ".Xauthority ($XAUTHORITY is not set)";
+                warnX11("X11 forwarding: no MIT-MAGIC-COOKIE-1 for display :" + displayNumber
+                        + " found in " + where + ". Unless the local X server runs with access control"
+                        + " disabled (e.g. VcXsrv/Xming '-ac', or 'xhost +localhost'), forwarded X11"
+                        + " connections will be rejected and remote GUI programs will report"
+                        + " 'Cannot open display' / 'Authorization required'. Check 'xauth list' or"
+                        + " set XAUTHORITY before starting JSSH.");
+            }
 
             io.xlogistx.jssh.ssh.x11.X11ChannelFactory factory =
                     new io.xlogistx.jssh.ssh.x11.X11ChannelFactory(
@@ -433,6 +518,56 @@ public class SSHConnection {
             System.err.println("X11 forwarding setup failed: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Report an X11 forwarding problem once per connection: to the listener's
+     * {@link ConnectionListener#onWarning(String)} (if any) and to stderr. The
+     * text is also kept for {@link #getX11Warning()}.
+     */
+    private void warnX11(String message) {
+        if (!x11CookieWarned.compareAndSet(false, true)) {
+            return;
+        }
+        x11Warning = message;
+        System.err.println("[JSSH] " + message);
+        ConnectionListener l = listener;
+        if (l != null) {
+            l.onWarning(message);
+        }
+    }
+
+    /**
+     * The X11 forwarding warning raised for this connection (e.g. no local
+     * authorization cookie), or {@code null} if none.
+     */
+    public String getX11Warning() {
+        return x11Warning;
+    }
+
+    /**
+     * A display host that refers to this machine. Besides the usual names, a
+     * host starting with '/' is the socket-path form macOS uses in $DISPLAY
+     * ({@code /private/tmp/com.apple.launchd.XXXX/org.xquartz:0}, split by the
+     * connect dialog at the last ':').
+     */
+    static boolean isLocalX11Host(String x11Host) {
+        return x11Host == null || x11Host.isEmpty()
+                || x11Host.startsWith("/")
+                || "unix".equalsIgnoreCase(x11Host) || "localhost".equalsIgnoreCase(x11Host)
+                || "127.0.0.1".equals(x11Host);
+    }
+
+    /**
+     * Unix-domain socket to reach the local X server, or {@code null} for a
+     * remote display host (TCP only). A path-style host is the launchd socket
+     * directory prefix; the socket file itself is named {@code <prefix>:<n>}.
+     */
+    static String x11SocketPathFor(String x11Host, int displayNumber) {
+        if (x11Host != null && x11Host.startsWith("/")) {
+            return x11Host + ":" + displayNumber;
+        }
+        return isLocalX11Host(x11Host) ? resolveLocalX11Socket(displayNumber) : null;
     }
 
     /**
@@ -474,17 +609,59 @@ public class SSHConnection {
             // On Windows, check for X server (like VcXsrv, Xming)
             String os = System.getProperty("os.name", "").toLowerCase();
             if (os.contains("win")) {
-                // Check common X server ports
-                try (java.net.Socket socket = new java.net.Socket()) {
-                    socket.connect(new java.net.InetSocketAddress("localhost", JSSHConst.X_SERVER_PORT), JSSHConst.X11_SOCKET_TIMEOUT_MS);
-                    return true;
-                } catch (Exception e) {
-                    return false;
-                }
+                return isX11DisplayReachable(":0");
             }
             return false;
         }
-        return true;
+        // $DISPLAY being set only says an X server *was* there when the shell
+        // started; check that its socket (or TCP port) is actually reachable.
+        return isX11DisplayReachable(display);
+    }
+
+    /**
+     * Split a display string ({@code [host]:n[.screen]}, or the macOS launchd
+     * path form) into {host, displayNumber}. The host is {@code ""} for {@code :n}.
+     */
+    static String[] splitX11Display(String display) {
+        String host = display;
+        int num = 0;
+        int colon = display.lastIndexOf(':');
+        if (colon >= 0) {
+            host = display.substring(0, colon);
+            String n = display.substring(colon + 1);
+            int dot = n.indexOf('.');
+            if (dot > 0) {
+                n = n.substring(0, dot);
+            }
+            try {
+                num = Integer.parseInt(n.trim());
+            } catch (NumberFormatException e) {
+                num = 0;
+            }
+        }
+        return new String[] { host, Integer.toString(num) };
+    }
+
+    /**
+     * True if the X server for {@code display} can be reached: its Unix-domain
+     * socket exists (local display) or its TCP port accepts a connection.
+     */
+    static boolean isX11DisplayReachable(String display) {
+        String[] parts = splitX11Display(display);
+        String host = parts[0];
+        int num = Integer.parseInt(parts[1]);
+        String socketPath = x11SocketPathFor(host, num);
+        if (socketPath != null && java.nio.file.Files.exists(java.nio.file.Path.of(socketPath))) {
+            return true;
+        }
+        String tcpHost = isLocalX11Host(host) ? "127.0.0.1" : host;
+        try (java.net.Socket socket = new java.net.Socket()) {
+            socket.connect(new java.net.InetSocketAddress(tcpHost, JSSHConst.X_SERVER_PORT + num),
+                    JSSHConst.X11_SOCKET_TIMEOUT_MS);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
@@ -579,6 +756,50 @@ public class SSHConnection {
 
     public String getUsername() {
         return username;
+    }
+
+    /**
+     * Line terminator the remote host expects for pasted text, derived from the
+     * server's SSH version banner (e.g. {@code SSH-2.0-OpenSSH_for_Windows_9.5}).
+     */
+    public io.xlogistx.jssh.terminal.TerminalPanel.LineEnding getHostLineEnding() {
+        return detectHostLineEnding(serverVersion);
+    }
+
+    /**
+     * Windows OpenSSH (conpty) treats CR as Enter and a following LF as a second
+     * keystroke; Unix ttys and editors take LF. Everything not identifiable as
+     * Windows is treated as Unix-like.
+     */
+    public static io.xlogistx.jssh.terminal.TerminalPanel.LineEnding detectHostLineEnding(String serverVersion) {
+        if (serverVersion != null && serverVersion.toLowerCase(java.util.Locale.ROOT).contains("windows")) {
+            return io.xlogistx.jssh.terminal.TerminalPanel.LineEnding.CR;
+        }
+        return io.xlogistx.jssh.terminal.TerminalPanel.LineEnding.LF;
+    }
+
+    /**
+     * Line terminator for pasted text: the profile's explicit choice
+     * ({@code LF}, {@code CR}, {@code CRLF}) or, for {@code AUTO}/blank/unknown,
+     * the convention detected from the server banner.
+     */
+    public io.xlogistx.jssh.terminal.TerminalPanel.LineEnding resolvePasteLineEnding(String override) {
+        return resolvePasteLineEnding(override, serverVersion);
+    }
+
+    public static io.xlogistx.jssh.terminal.TerminalPanel.LineEnding resolvePasteLineEnding(
+            String override, String serverVersion) {
+        if (override != null) {
+            String o = override.trim().toUpperCase(java.util.Locale.ROOT);
+            if (!o.isEmpty() && !JSSHConst.PASTE_LINE_ENDING_AUTO.equals(o)) {
+                try {
+                    return io.xlogistx.jssh.terminal.TerminalPanel.LineEnding.valueOf(o);
+                } catch (IllegalArgumentException ignore) {
+                    // fall through to auto-detection
+                }
+            }
+        }
+        return detectHostLineEnding(serverVersion);
     }
 
     public String getServerVersion() {

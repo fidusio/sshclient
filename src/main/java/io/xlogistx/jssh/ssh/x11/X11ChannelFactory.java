@@ -37,12 +37,21 @@ public class X11ChannelFactory implements ChannelFactory {
         return X11_CHANNEL_TYPE;
     }
 
+    // Warn once per factory (i.e. per connection) at the moment it matters
+    private final java.util.concurrent.atomic.AtomicBoolean noCookieWarned =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @Override
     public Channel createChannel(Session session) throws IOException {
         org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(X11ChannelFactory.class);
         if (log.isDebugEnabled()) {
             log.debug("[X11] server opened an x11 channel; bridging to local X server {} (localCookie={})",
                     xServerAddress, realCookie != null ? "present" : "none");
+        }
+        if (realCookie == null && noCookieWarned.compareAndSet(false, true)) {
+            log.warn("[X11] no local X authorization cookie is available; the placeholder cookie is passed"
+                    + " through and the local X server ({}) will reject the connection unless access control"
+                    + " is disabled", unixSocketPath != null ? unixSocketPath + " / " + xServerAddress : xServerAddress);
         }
         return new X11ClientChannel(unixSocketPath, xServerAddress, connectTimeoutMs, fakeCookie, realCookie);
     }

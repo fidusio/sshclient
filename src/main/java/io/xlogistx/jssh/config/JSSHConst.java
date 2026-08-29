@@ -111,6 +111,12 @@ public final class JSSHConst {
     /** Default X11 display */
     public static final String DEFAULT_X11_DISPLAY = "localhost:0";
 
+    /** Paste line-ending choice meaning "detect from the server banner". */
+    public static final String PASTE_LINE_ENDING_AUTO = "AUTO";
+
+    /** Choices for a profile's paste line ending: AUTO or a TerminalPanel.LineEnding name. */
+    public static final String[] PASTE_LINE_ENDINGS = { PASTE_LINE_ENDING_AUTO, "LF", "CR", "CRLF" };
+
     /** X server port */
     public static final int X_SERVER_PORT = 6000;
 

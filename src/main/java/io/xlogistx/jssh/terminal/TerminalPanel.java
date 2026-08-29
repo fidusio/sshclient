@@ -53,6 +53,34 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     
     private boolean applicationCursorKeys = false;
     private boolean alternateScreen = false;
+    // xterm bracketed paste (DECSET 2004): when the remote app enables it, pasted
+    // text is wrapped in ESC[200~ ... ESC[201~ so editors don't auto-indent it.
+    private boolean bracketedPaste = false;
+    // Newline to send for each line of pasted text; chosen per connection from
+    // the remote host's convention (see SSHConnection.getHostLineEnding()).
+    private LineEnding pasteLineEnding = LineEnding.LF;
+
+    /**
+     * Line terminator conventions for text sent to the remote host.
+     */
+    public enum LineEnding {
+        /** Carriage return only ({@code \r}) - Windows console / conpty "Enter". */
+        CR("\r"),
+        /** Line feed only ({@code \n}) - Unix/Linux/macOS. */
+        LF("\n"),
+        /** CR+LF pair ({@code \r\n}). */
+        CRLF("\r\n");
+
+        private final String sequence;
+
+        LineEnding(String sequence) {
+            this.sequence = sequence;
+        }
+
+        public String sequence() {
+            return sequence;
+        }
+    }
     
     // Saved screen for alternate buffer
     private char[][] savedScreen;
@@ -65,6 +93,13 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     private int selStartX = -1, selStartY = -1;
     private int selEndX = -1, selEndY = -1;
     private boolean selecting = false;
+    // True once the current selection has already been placed on the clipboard
+    // (mouse release / double- / triple-click auto-copy). A following Ctrl+C then
+    // sends SIGINT instead of copying the same text a second time.
+    private boolean selectionCopied = false;
+
+    // Cursor blink timer; see addNotify()/removeNotify()/dispose()
+    private final Timer blinkTimer;
     
     // ANSI escape sequence parsing
     private StringBuilder escapeBuffer = new StringBuilder();
@@ -123,13 +158,16 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         addMouseMotionListener(this);
         addMouseWheelListener(this);
         
-        // Cursor blink timer
-        Timer blinkTimer = new Timer(500, e -> {
+        // Cursor blink timer. Started in addNotify() and stopped in removeNotify():
+        // a running javax.swing.Timer is referenced by the shared TimerQueue, so a
+        // timer that is never stopped keeps the whole panel (and its scrollback)
+        // reachable long after the tab is closed.
+        blinkTimer = new Timer(500, e -> {
             cursorBlink = !cursorBlink;
             repaint();
         });
-        blinkTimer.start();
-        
+        blinkTimer.setRepeats(true);
+
         // Request focus when clicked
         addMouseListener(new MouseAdapter() {
             @Override
@@ -200,6 +238,40 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     public void setTerminalListener(TerminalListener listener) {
         this.listener = listener;
     }
+
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        if (blinkTimer != null && !blinkTimer.isRunning()) {
+            blinkTimer.start();
+        }
+    }
+
+    @Override
+    public void removeNotify() {
+        if (blinkTimer != null) {
+            blinkTimer.stop();
+        }
+        super.removeNotify();
+    }
+
+    /**
+     * Release resources held outside this panel (the cursor blink timer, which
+     * would otherwise pin the panel in Swing's shared TimerQueue). Safe to call
+     * more than once; the timer restarts if the panel is later re-added to a window.
+     */
+    public void dispose() {
+        if (blinkTimer != null) {
+            blinkTimer.stop();
+        }
+    }
+
+    /**
+     * @return true while the cursor blink timer is scheduled (for tests/diagnostics)
+     */
+    boolean isBlinkTimerRunning() {
+        return blinkTimer != null && blinkTimer.isRunning();
+    }
     
     /**
      * Display a message in the terminal (not sent to remote)
@@ -244,6 +316,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     private int utf8State = 0;      // 0 = expecting first byte, 1-3 = expecting continuation bytes
     private int utf8Char = 0;       // Character being built
     private int utf8Remaining = 0;  // Remaining continuation bytes expected
+    private int utf8Min = 0;        // Smallest code point the current sequence may legally encode
     
     /**
      * Write data to terminal (from SSH)
@@ -260,11 +333,14 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                     utf8Remaining--;
                     if (utf8Remaining == 0) {
                         // Complete character - may be outside the BMP
-                        processCodePoint(utf8Char);
+                        processCodePoint(sanitizeCodePoint(utf8Char, utf8Min));
                     }
                 } else {
-                    // Invalid continuation, reset and process as new byte
+                    // Invalid continuation: the partial sequence is garbage. Show a
+                    // replacement character for it (instead of silently dropping
+                    // it), then treat this byte as the start of a new sequence.
                     utf8Remaining = 0;
+                    processChar((char) 0xFFFD);
                     processUtf8Start(b);
                 }
             } else {
@@ -278,18 +354,21 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         if ((b & 0x80) == 0) {
             // ASCII (0xxxxxxx)
             processChar((char) b);
-        } else if ((b & 0xE0) == 0xC0) {
-            // 2-byte sequence (110xxxxx)
+        } else if ((b & 0xE0) == 0xC0 && b >= 0xC2) {
+            // 2-byte sequence (110xxxxx); 0xC0/0xC1 can only encode overlong forms
             utf8Char = b & 0x1F;
             utf8Remaining = 1;
+            utf8Min = 0x80;
         } else if ((b & 0xF0) == 0xE0) {
             // 3-byte sequence (1110xxxx)
             utf8Char = b & 0x0F;
             utf8Remaining = 2;
-        } else if ((b & 0xF8) == 0xF0) {
-            // 4-byte sequence (11110xxx)
+            utf8Min = 0x800;
+        } else if ((b & 0xF8) == 0xF0 && b <= 0xF4) {
+            // 4-byte sequence (11110xxx); 0xF5-0xF7 would exceed U+10FFFF
             utf8Char = b & 0x07;
             utf8Remaining = 3;
+            utf8Min = 0x10000;
         } else {
             // Invalid UTF-8 start byte, display replacement character or skip
             processChar('\uFFFD');
@@ -302,16 +381,32 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     }
     
     /**
+     * Replace a decoded value that is not a valid scalar value with U+FFFD:
+     * beyond U+10FFFF (e.g. lead byte 0xF4 followed by 0x90+), a UTF-16
+     * surrogate, or an overlong encoding. Without this {@link Character#toChars}
+     * throws and kills the EDT runnable mid-chunk (e.g. when cat-ing a binary).
+     */
+    static int sanitizeCodePoint(int cp, int minForSequence) {
+        if (cp > Character.MAX_CODE_POINT || cp < minForSequence
+                || (cp >= Character.MIN_SURROGATE && cp <= Character.MAX_SURROGATE)) {
+            return 0xFFFD;
+        }
+        return cp;
+    }
+
+    /**
      * Process a full Unicode code point. Code points outside the BMP are stored
      * as a surrogate pair (two cells) so they are not truncated to garbage.
      */
     private void processCodePoint(int cp) {
         if (inEscape || cp <= 0xFFFF) {
             processChar((char) cp);
-        } else {
+        } else if (Character.isValidCodePoint(cp)) {
             for (char c : Character.toChars(cp)) {
                 processChar(c);
             }
+        } else {
+            processChar((char) 0xFFFD);
         }
     }
 
@@ -507,10 +602,11 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             case 'X': // Erase characters
                 int count = Math.max(1, args[0]);
                 for (int i = 0; i < count && cursorX + i < cols; i++) {
-                    if (cursorY >= 0 && cursorY < rows) {
+                    if (cursorY >= 0 && cursorY < rows && cursorX + i >= 0) {
                         screen[cursorY][cursorX + i] = ' ';
                         colors[cursorY][cursorX + i] = 7;
                         bgColors[cursorY][cursorX + i] = 0;
+                        bold[cursorY][cursorX + i] = false;
                         reverse[cursorY][cursorX + i] = false;
                     }
                 }
@@ -524,11 +620,8 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             case 'm': // SGR - Set Graphics Rendition
                 processSGR(args);
                 break;
-            case 'r': // Set scroll region
-                scrollTop = Math.max(0, args[0] - 1);
-                scrollBottom = Math.min(rows - 1, (args.length > 1 ? args[1] : rows) - 1);
-                cursorX = 0;
-                cursorY = 0;
+            case 'r': // DECSTBM - set scroll region
+                setScrollRegion(args[0], args.length > 1 ? args[1] : 0);
                 break;
             case 's': // Save cursor position
                 savedCursorX = cursorX;
@@ -559,13 +652,41 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         }
     }
     
-    private void processPrivateMode(String params, boolean set) {
-        int mode = 0;
-        try {
-            mode = Integer.parseInt(params.replaceAll("[^0-9]", ""));
-        } catch (NumberFormatException e) {
+    /**
+     * DECSTBM. Parameters are 1-based; 0 or missing means the default (top=1,
+     * bottom=rows). Both are clamped into [1, rows]; the sequence is ignored if
+     * top >= bottom. On success the cursor moves to the home position, as in xterm.
+     */
+    private void setScrollRegion(int top, int bottom) {
+        if (top <= 0) top = 1;
+        if (bottom <= 0) bottom = rows;
+        top = Math.min(top, rows);
+        bottom = Math.min(bottom, rows);
+        if (top >= bottom) {
             return;
         }
+        scrollTop = top - 1;
+        scrollBottom = bottom - 1;
+        cursorX = 0;
+        cursorY = 0;
+    }
+
+    private void processPrivateMode(String params, boolean set) {
+        // xterm allows several modes in one sequence, e.g. ESC[?12;25h (cnorm)
+        for (String part : params.split(";")) {
+            String digits = part.replaceAll("[^0-9]", "");
+            if (digits.isEmpty()) continue;
+            int mode;
+            try {
+                mode = Integer.parseInt(digits);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            applyPrivateMode(mode, set);
+        }
+    }
+
+    private void applyPrivateMode(int mode, boolean set) {
         switch (mode) {
             case 1: // Application cursor keys
                 applicationCursorKeys = set;
@@ -634,7 +755,8 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                     alternateScreen = false;
                 }
                 break;
-            case 2004: // Bracketed paste mode - just acknowledge it
+            case 2004: // Bracketed paste mode
+                bracketedPaste = set;
                 break;
         }
     }
@@ -705,16 +827,81 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                 currentFg = arg - 90 + 8;
             } else if (arg >= 100 && arg <= 107) {
                 currentBg = arg - 100 + 8;
-            } else if (arg == 38 && i + 2 < args.length && args[i + 1] == 5) {
-                // 256 color foreground
-                currentFg = Math.min(15, args[i + 2]);
-                i += 2;
-            } else if (arg == 48 && i + 2 < args.length && args[i + 1] == 5) {
-                // 256 color background
-                currentBg = Math.min(15, args[i + 2]);
-                i += 2;
+            } else if (arg == 38 || arg == 48) {
+                // Extended colour: 38/48;5;n (256-colour) or 38/48;2;r;g;b (truecolor).
+                // Every sub-parameter must be consumed here, otherwise a stray
+                // 0/1/... would be re-read as reset/bold/etc.
+                int consumed = 0;
+                int color = -1;
+                if (i + 1 < args.length) {
+                    int kind = args[i + 1];
+                    if (kind == 5) {
+                        consumed = 2;
+                        if (i + 2 < args.length) {
+                            color = ansi256ToPalette(args[i + 2]);
+                        }
+                    } else if (kind == 2) {
+                        consumed = 4;
+                        if (i + 4 < args.length) {
+                            color = nearestPaletteColor(args[i + 2], args[i + 3], args[i + 4]);
+                        }
+                    } else {
+                        // Unknown sub-type; skip the introducer so the rest is not misread
+                        consumed = 1;
+                    }
+                }
+                if (color >= 0) {
+                    if (arg == 38) currentFg = color; else currentBg = color;
+                }
+                i += consumed;
             }
         }
+    }
+
+    /**
+     * Map a 256-colour palette index to the closest of the 16 colours this panel
+     * renders. 0-15 are the ANSI colours themselves; 16-231 the 6x6x6 cube;
+     * 232-255 the grey ramp. Out-of-range values are clamped.
+     */
+    static int ansi256ToPalette(int n) {
+        if (n < 0) n = 0;
+        if (n > 255) n = 255;
+        if (n < 16) {
+            return n;
+        }
+        int r, g, b;
+        if (n < 232) {
+            int c = n - 16;
+            int ri = c / 36, gi = (c / 6) % 6, bi = c % 6;
+            r = ri == 0 ? 0 : 55 + ri * 40;
+            g = gi == 0 ? 0 : 55 + gi * 40;
+            b = bi == 0 ? 0 : 55 + bi * 40;
+        } else {
+            r = g = b = 8 + (n - 232) * 10;
+        }
+        return nearestPaletteColor(r, g, b);
+    }
+
+    /**
+     * @return index into {@link JSSHConst#ANSI_COLORS} nearest (Euclidean RGB
+     *         distance) to the given colour; components are clamped to 0-255.
+     */
+    static int nearestPaletteColor(int r, int g, int b) {
+        r = Math.max(0, Math.min(255, r));
+        g = Math.max(0, Math.min(255, g));
+        b = Math.max(0, Math.min(255, b));
+        int best = 7;
+        long bestDist = Long.MAX_VALUE;
+        for (int i = 0; i < ANSI_COLORS.length && i < 16; i++) {
+            Color c = ANSI_COLORS[i];
+            long dr = c.getRed() - r, dg = c.getGreen() - g, db = c.getBlue() - b;
+            long dist = dr * dr + dg * dg + db * db;
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = i;
+            }
+        }
+        return best;
     }
     
     private void putChar(char c) {
@@ -749,8 +936,9 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     }
     
     private void scrollUp() {
-        // Save top line to scrollback buffer (only if scrolling the whole screen)
-        if (scrollTop == 0 && !alternateScreen) {
+        // Save top line to scrollback buffer only when the whole screen scrolls;
+        // a partial region (e.g. ESC[1;10r) must not leak lines into history
+        if (scrollTop == 0 && scrollBottom == rows - 1 && !alternateScreen) {
             scrollbackChars.add(screen[0].clone());
             scrollbackColors.add(colors[0].clone());
             scrollbackBgColors.add(bgColors[0].clone());
@@ -875,45 +1063,50 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         }
     }
     
+    /** Replace row {@code y} with a blank line carrying default attributes. */
+    private void blankRow(int y) {
+        screen[y] = new char[cols];
+        colors[y] = new int[cols];
+        bgColors[y] = new int[cols];
+        bold[y] = new boolean[cols];
+        reverse[y] = new boolean[cols];
+        Arrays.fill(screen[y], ' ');
+        Arrays.fill(colors[y], 7);
+    }
+
     private void insertLines(int n) {
         if (cursorY < 0 || cursorY >= rows) return;
-        int safeBottom = Math.min(scrollBottom, rows - 1);
-        
+        int safeBottom = Math.max(0, Math.min(scrollBottom, rows - 1));
+        // IL/DL only act inside the scroll region
+        if (cursorY > safeBottom || cursorY < Math.max(0, scrollTop)) return;
+
         for (int i = 0; i < n; i++) {
             for (int y = safeBottom; y > cursorY && y > 0; y--) {
                 screen[y] = screen[y - 1];
                 colors[y] = colors[y - 1];
                 bgColors[y] = bgColors[y - 1];
+                bold[y] = bold[y - 1];
                 reverse[y] = reverse[y - 1];
             }
-            screen[cursorY] = new char[cols];
-            colors[cursorY] = new int[cols];
-            bgColors[cursorY] = new int[cols];
-            reverse[cursorY] = new boolean[cols];
-            Arrays.fill(screen[cursorY], ' ');
-            Arrays.fill(colors[cursorY], 7);
+            blankRow(cursorY);
         }
     }
-    
+
     private void deleteLines(int n) {
         if (cursorY < 0 || cursorY >= rows) return;
-        int safeBottom = Math.min(scrollBottom, rows - 1);
-        
+        int safeBottom = Math.max(0, Math.min(scrollBottom, rows - 1));
+        // IL/DL only act inside the scroll region
+        if (cursorY > safeBottom || cursorY < Math.max(0, scrollTop)) return;
+
         for (int i = 0; i < n; i++) {
             for (int y = cursorY; y < safeBottom && y + 1 < rows; y++) {
                 screen[y] = screen[y + 1];
                 colors[y] = colors[y + 1];
                 bgColors[y] = bgColors[y + 1];
+                bold[y] = bold[y + 1];
                 reverse[y] = reverse[y + 1];
             }
-            if (safeBottom < rows) {
-                screen[safeBottom] = new char[cols];
-                colors[safeBottom] = new int[cols];
-                bgColors[safeBottom] = new int[cols];
-                reverse[safeBottom] = new boolean[cols];
-                Arrays.fill(screen[safeBottom], ' ');
-                Arrays.fill(colors[safeBottom], 7);
-            }
+            blankRow(safeBottom);
         }
     }
     
@@ -943,18 +1136,56 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             screen[cursorY][x] = screen[cursorY][x + n];
             colors[cursorY][x] = colors[cursorY][x + n];
             bgColors[cursorY][x] = bgColors[cursorY][x + n];
+            bold[cursorY][x] = bold[cursorY][x + n];
+            reverse[cursorY][x] = reverse[cursorY][x + n];
         }
         for (int x = Math.max(safeX, cols - n); x < cols; x++) {
             screen[cursorY][x] = ' ';
             colors[cursorY][x] = 7;
             bgColors[cursorY][x] = 0;
+            bold[cursorY][x] = false;
+            reverse[cursorY][x] = false;
         }
     }
+
+    /**
+     * @return true if cell (x, y) on the live screen has the reverse-video attribute
+     *         (package-private, for tests)
+     */
+    boolean isReverseAt(int x, int y) {
+        return y >= 0 && y < rows && x >= 0 && x < cols && reverse[y][x];
+    }
+
+    /**
+     * @return the palette index (0-15) of the foreground at cell (x, y), or -1
+     *         when out of range (package-private, for tests)
+     */
+    int getFgAt(int x, int y) {
+        return (y >= 0 && y < rows && x >= 0 && x < cols) ? colors[y][x] : -1;
+    }
+
+    /**
+     * @return the palette index (0-15) of the background at cell (x, y), or -1
+     *         when out of range (package-private, for tests)
+     */
+    int getBgAt(int x, int y) {
+        return (y >= 0 && y < rows && x >= 0 && x < cols) ? bgColors[y][x] : -1;
+    }
+
+    boolean isBoldAt(int x, int y) {
+        return y >= 0 && y < rows && x >= 0 && x < cols && bold[y][x];
+    }
+
+    int getCursorX() { return cursorX; }
+    int getCursorY() { return cursorY; }
+    int getScrollTop() { return scrollTop; }
+    int getScrollBottom() { return scrollBottom; }
+    boolean isCursorVisible() { return cursorVisible; }
     
     private void sendResponse(String response) {
         if (outputStream != null) {
             try {
-                outputStream.write(response.getBytes());
+                outputStream.write(encodeForRemote(response));
                 outputStream.flush();
             } catch (IOException e) { }
         }
@@ -1095,26 +1326,78 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     // Keyboard handling
     @Override
     public void keyTyped(KeyEvent e) {
-        // Don't handle if control/alt is pressed (handled in keyPressed)
-        if (e.isControlDown() || e.isAltDown()) {
+        // Don't handle if control/alt is pressed (handled in keyPressed) - except
+        // AltGr, which produces an ordinary character on non-US layouts.
+        if ((e.isControlDown() || e.isAltDown()) && !isAltGr(e)) {
             return;
         }
-        
+
         char c = e.getKeyChar();
-        
+
         // Only handle printable characters (space and above, excluding DEL 0x7F)
         // All special keys (Delete, Backspace, Enter, Tab, arrows, function keys, etc.)
         // are handled in keyPressed
         if (c >= ' ' && c != 0x7f && c != KeyEvent.CHAR_UNDEFINED && outputStream != null) {
+            // Astral characters (emoji, some CJK) arrive as two keyTyped events;
+            // hold the high surrogate until its partner shows up.
+            String text;
+            if (Character.isHighSurrogate(c)) {
+                pendingHighSurrogate = c;
+                return;
+            } else if (Character.isLowSurrogate(c) && pendingHighSurrogate != 0) {
+                text = new String(new char[] { pendingHighSurrogate, c });
+                pendingHighSurrogate = 0;
+            } else {
+                pendingHighSurrogate = 0;
+                text = String.valueOf(c);
+            }
             // Scroll to bottom when typing
             if (scrollOffset > 0) {
                 scrollToBottom();
             }
             try {
-                outputStream.write(c);
+                outputStream.write(encodeForRemote(text));
                 outputStream.flush();
             } catch (IOException ex) { }
         }
+    }
+
+    private char pendingHighSurrogate = 0;
+
+    /**
+     * Typed text goes to the remote as UTF-8. {@code OutputStream.write(int)}
+     * only sent the low byte, which truncated anything outside ASCII.
+     */
+    static byte[] encodeForRemote(String text) {
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * AltGr is reported as Ctrl+Alt on Windows (and as ALT_GRAPH on Linux/macOS).
+     * Such chords type a character (e.g. AltGr+Q = '@' on a German layout) and
+     * must not be treated as Ctrl+letter control codes.
+     */
+    static boolean isAltGr(KeyEvent e) {
+        return e.isAltGraphDown() || (e.isControlDown() && e.isAltDown());
+    }
+
+    /**
+     * Alt+&lt;printable key&gt; without Ctrl/AltGr/Meta is a Meta chord. Returns
+     * the ESC-prefixed sequence to send, or {@code null} if the event is not one.
+     * Letters follow Shift; other keys are sent as the key event reports them.
+     */
+    static String metaSequence(KeyEvent e) {
+        if (!e.isAltDown() || e.isControlDown() || e.isAltGraphDown() || e.isMetaDown()) {
+            return null;
+        }
+        char ch = e.getKeyChar();
+        if (ch < ' ' || ch == 0x7f || ch == KeyEvent.CHAR_UNDEFINED) {
+            return null;
+        }
+        if (Character.isLetter(ch)) {
+            ch = e.isShiftDown() ? Character.toUpperCase(ch) : Character.toLowerCase(ch);
+        }
+        return (char) 0x1B + "" + ch;
     }
     
     @Override
@@ -1124,6 +1407,24 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         
         int keyCode = e.getKeyCode();
         
+        // Alt+<key> is Meta: send ESC followed by the key, as xterm does, so
+        // readline/emacs bindings (M-b, M-f, M-.) work. While the terminal has
+        // focus this takes precedence over menu mnemonics.
+        String meta = metaSequence(e);
+        if (meta != null) {
+            if (outputStream != null) {
+                if (scrollOffset > 0) {
+                    scrollToBottom();
+                }
+                try {
+                    outputStream.write(encodeForRemote(meta));
+                    outputStream.flush();
+                } catch (IOException ex) { }
+            }
+            e.consume();
+            return;
+        }
+
         // Handle Tab key - send to terminal for completion
         if (keyCode == KeyEvent.VK_TAB) {
             e.consume(); // Prevent focus traversal
@@ -1179,7 +1480,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                     scrollToBottom();
                 }
                 try {
-                    outputStream.write("\u001b[3~".getBytes());
+                    outputStream.write(encodeForRemote((char) 0x1B + "[3~"));
                     outputStream.flush();
                 } catch (IOException ex) { }
             }
@@ -1235,42 +1536,50 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             case KeyEvent.VK_F12: seq = "\u001b[24~"; break;
         }
         
+        // A plain Ctrl chord: not AltGr (Ctrl+Alt on Windows), which types a character
+        boolean ctrl = e.isControlDown() && !isAltGr(e);
+
         // Handle Ctrl+Shift+C for copy (always copy)
-        if (e.isControlDown() && e.isShiftDown() && keyCode == KeyEvent.VK_C) {
+        if (ctrl && e.isShiftDown() && keyCode == KeyEvent.VK_C) {
             copySelection();
             e.consume();
             return;
         }
         
         // Handle Ctrl+Shift+V for paste
-        if (e.isControlDown() && e.isShiftDown() && keyCode == KeyEvent.VK_V) {
+        if (ctrl && e.isShiftDown() && keyCode == KeyEvent.VK_V) {
             paste();
             e.consume();
             return;
         }
         
-        // Handle Ctrl+C - copy if selection exists, otherwise send interrupt
-        if (e.isControlDown() && !e.isShiftDown() && keyCode == KeyEvent.VK_C) {
-            if (hasSelection()) {
+        // Handle Ctrl+C - copy a not-yet-copied selection, otherwise send interrupt.
+        // A mouse selection is auto-copied on release, so the next Ctrl+C must
+        // not copy it again: it drops the highlight and sends SIGINT as usual.
+        if (ctrl && !e.isShiftDown() && keyCode == KeyEvent.VK_C) {
+            if (hasSelection() && !selectionCopied) {
                 copySelection();
                 clearSelection();
                 e.consume();
                 return;
             } else {
+                if (hasSelection()) {
+                    clearSelection();
+                }
                 // Send Ctrl+C (interrupt)
                 seq = String.valueOf((char) 3);
             }
         }
         
         // Handle Ctrl+V for paste
-        if (e.isControlDown() && !e.isShiftDown() && keyCode == KeyEvent.VK_V) {
+        if (ctrl && !e.isShiftDown() && keyCode == KeyEvent.VK_V) {
             paste();
             e.consume();
             return;
         }
         
         // Handle other Ctrl+key combinations
-        if (e.isControlDown() && !e.isShiftDown() && keyCode >= KeyEvent.VK_A && keyCode <= KeyEvent.VK_Z) {
+        if (ctrl && !e.isShiftDown() && keyCode >= KeyEvent.VK_A && keyCode <= KeyEvent.VK_Z) {
             if (keyCode != KeyEvent.VK_C && keyCode != KeyEvent.VK_V) { // Already handled above
                 char ctrlChar = (char)(keyCode - KeyEvent.VK_A + 1);
                 seq = String.valueOf(ctrlChar);
@@ -1283,7 +1592,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                 scrollToBottom();
             }
             try {
-                outputStream.write(seq.getBytes());
+                outputStream.write(encodeForRemote(seq));
                 outputStream.flush();
                 e.consume();
             } catch (IOException ex) { }
@@ -1319,6 +1628,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                 selEndX = selStartX;
                 selEndY = selStartY;
                 selecting = true;
+                selectionCopied = false;
             }
             repaint();
         }
@@ -1331,6 +1641,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
             // Auto-copy selection to clipboard when mouse is released
             if (hasSelection()) {
                 copySelection();
+                selectionCopied = true;
             }
         }
     }
@@ -1351,10 +1662,12 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                 // Double click - select word
                 selectWord(e.getX() / charWidth, e.getY() / charHeight);
                 copySelection(); // Auto-copy
+                selectionCopied = true;
             } else if (e.getClickCount() == 3) {
                 // Triple click - select line
                 selectLine(e.getY() / charHeight);
                 copySelection(); // Auto-copy
+                selectionCopied = true;
             }
         }
     }
@@ -1430,7 +1743,40 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         selStartX = 0;
         selEndX = cols - 1;
         selStartY = selEndY = y;
+        selectionCopied = false;
         repaint();
+    }
+
+    /**
+     * Select a rectangular-by-position range without copying it (package-private,
+     * for tests and programmatic use). Cells are 0-based.
+     */
+    void setSelection(int startX, int startY, int endX, int endY) {
+        selStartX = startX;
+        selStartY = startY;
+        selEndX = endX;
+        selEndY = endY;
+        selectionCopied = false;
+        repaint();
+    }
+
+    /** Mark the current selection as already on the clipboard (package-private, for tests). */
+    void markSelectionCopied() {
+        selectionCopied = true;
+    }
+
+    boolean isSelectionCopied() {
+        return selectionCopied;
+    }
+
+    /**
+     * Decide what a plain Ctrl+C should do given the current selection state.
+     *
+     * @return true when Ctrl+C should copy the selection, false when it should
+     *         send the interrupt character (0x03)
+     */
+    boolean ctrlCShouldCopy() {
+        return hasSelection() && !selectionCopied;
     }
     
     private void selectWord(int x, int y) {
@@ -1444,6 +1790,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
         selStartX = start;
         selEndX = end;
         selStartY = selEndY = y;
+        selectionCopied = false;
         repaint();
     }
     
@@ -1454,6 +1801,7 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
     
     private void clearSelection() {
         selStartX = selStartY = selEndX = selEndY = -1;
+        selectionCopied = false;
         repaint();
     }
     
@@ -1521,10 +1869,64 @@ public class TerminalPanel extends JPanel implements KeyListener, MouseListener,
                 if (scrollOffset > 0) {
                     scrollToBottom();
                 }
-                outputStream.write(text.getBytes());
+                String toSend = normalizeForPaste(text, pasteLineEnding);
+                if (bracketedPaste) {
+                    toSend = "\u001b[200~" + toSend + "\u001b[201~";
+                }
+                outputStream.write(toSend.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 outputStream.flush();
             }
         } catch (Exception e) { }
+    }
+
+    /**
+     * Rewrite every line break in clipboard text ({@code \r\n}, lone {@code \r},
+     * lone {@code \n}) to the given terminator. Without this a Windows clipboard's
+     * {@code 
+} reaches the remote as two separate "Enter" keystrokes, which
+     * doubles every line in editors and shells.
+     */
+    static String normalizeForPaste(String text, LineEnding lineEnding) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String eol = lineEnding.sequence();
+        StringBuilder sb = new StringBuilder(text.length() + 16);
+        int n = text.length();
+        for (int i = 0; i < n; i++) {
+            char c = text.charAt(i);
+            if (c == '\r') {
+                if (i + 1 < n && text.charAt(i + 1) == '\n') {
+                    i++;
+                }
+                sb.append(eol);
+            } else if (c == '\n') {
+                sb.append(eol);
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Set the line terminator used when pasting multi-line text into this terminal.
+     */
+    public void setPasteLineEnding(LineEnding lineEnding) {
+        if (lineEnding != null) {
+            this.pasteLineEnding = lineEnding;
+        }
+    }
+
+    public LineEnding getPasteLineEnding() {
+        return pasteLineEnding;
+    }
+
+    /**
+     * @return true while the remote application has bracketed paste (DECSET 2004) enabled
+     */
+    public boolean isBracketedPaste() {
+        return bracketedPaste;
     }
     
     public void resize(int newCols, int newRows) {
